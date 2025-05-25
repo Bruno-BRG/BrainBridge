@@ -12,3 +12,4 @@ applyTo: '**'
 - Use type hints
 - Handle exceptions properly
 - Maintain updated dependencies
+- MOST IMPORTANT: Each file should only have one class in it just like in Java.

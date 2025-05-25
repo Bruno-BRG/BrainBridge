@@ -16,362 +16,34 @@ License: BSD (3-clause)
 
 import sys
 import os
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
+# Add the project root to the Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 import seaborn as sns
-from sklearn.model_selection import train_test_split, KFold
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFileDialog, QTextEdit, QTabWidget,
+    QPushButton, QLabel, QTabWidget,
     QGroupBox, QProgressBar, QComboBox, QSpinBox, QCheckBox,
-    QTableWidget, QTableWidgetItem, QSplitter, QMessageBox,
-    QGridLayout, QFrame, QSlider, QDoubleSpinBox, QListWidget,
-    QListWidgetItem, QScrollArea
+    QMessageBox,
+    QSlider, QScrollArea
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QPixmap, QPalette, QColor
-from typing import Optional
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
 
-# Import our custom modules
-from src.model.eeg_inception_erp import EEGModel
-from src.data.data_loader import BCIDataLoader, BCIDataset
+# Update imports to use relative imports
+from .PlotCanvas import PlotCanvas  # Change from UI.PlotCanvas to .PlotCanvas
+from .data_tab.DataLoadThread import DataLoadThread  # Change from UI.data_tab.DataLoadThread to .data_tab.DataLoadThread
+from src.data.data_loader import BCIDataLoader, create_data_loaders  # This remains the same as it's from src package
 
 # Set the style
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
 
 
-class TrainingThread(QThread):
-    """Thread for training models in background"""
-    progress_updated = pyqtSignal(int)
-    epoch_completed = pyqtSignal(int, float, float, float, float)  # epoch, train_loss, train_acc, val_loss, val_acc
-    training_completed = pyqtSignal(object, str)  # model, save_path
-    error_occurred = pyqtSignal(str)
-    
-    def __init__(self, X_train, y_train, X_val, y_val, model_config, training_config, save_path):
-        super().__init__()
-        self.X_train = X_train
-        self.y_train = y_train
-        self.X_val = X_val
-        self.y_val = y_val
-        self.model_config = model_config
-        self.training_config = training_config
-        self.save_path = save_path
-        
-    def run(self):
-        try:
-            # Initialize model
-            model = EEGModel(**self.model_config)
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            model.to(device)
-            
-            # Prepare data
-            train_dataset = BCIDataset(self.X_train, self.y_train)
-            val_dataset = BCIDataset(self.X_val, self.y_val)
-            
-            train_loader = DataLoader(train_dataset, batch_size=self.training_config['batch_size'], shuffle=True)
-            val_loader = DataLoader(val_dataset, batch_size=self.training_config['batch_size'], shuffle=False)
-            
-            # Initialize training components
-            criterion = nn.CrossEntropyLoss()
-            optimizer = optim.Adam(model.parameters(), lr=self.training_config['learning_rate'])
-            
-            num_epochs = self.training_config['num_epochs']
-            best_val_acc = 0.0
-            patience_counter = 0
-            
-            for epoch in range(num_epochs):
-                # Training phase
-                model.train()
-                train_loss = 0.0
-                train_correct = 0
-                train_total = 0
-                
-                for inputs, labels in train_loader:
-                    inputs, labels = inputs.to(device), labels.to(device)
-                    
-                    optimizer.zero_grad()
-                    outputs = model(inputs)
-                    loss = criterion(outputs, labels)
-                    loss.backward()
-                    optimizer.step()
-                    
-                    train_loss += loss.item()
-                    _, predicted = torch.max(outputs.data, 1)
-                    train_total += labels.size(0)
-                    train_correct += (predicted == labels).sum().item()
-                
-                train_loss /= len(train_loader)
-                train_acc = train_correct / train_total
-                
-                # Validation phase
-                model.eval()
-                val_loss = 0.0
-                val_correct = 0
-                val_total = 0
-                
-                with torch.no_grad():
-                    for inputs, labels in val_loader:
-                        inputs, labels = inputs.to(device), labels.to(device)
-                        outputs = model(inputs)
-                        loss = criterion(outputs, labels)
-                        
-                        val_loss += loss.item()
-                        _, predicted = torch.max(outputs.data, 1)
-                        val_total += labels.size(0)
-                        val_correct += (predicted == labels).sum().item()
-                
-                val_loss /= len(val_loader)
-                val_acc = val_correct / val_total
-                
-                # Emit epoch results
-                self.epoch_completed.emit(epoch + 1, train_loss, train_acc, val_loss, val_acc)
-                
-                # Early stopping
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    patience_counter = 0
-                    # Save best model
-                    torch.save(model.state_dict(), self.save_path)
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.training_config['patience']:
-                        break
-                
-                # Update progress
-                progress = int((epoch + 1) / num_epochs * 100)
-                self.progress_updated.emit(progress)
-            
-            self.training_completed.emit(model, self.save_path)
-            
-        except Exception as e:
-            self.error_occurred.emit(f"Training error: {str(e)}")
-
-
-class ModelLoadThread(QThread):
-    """Thread for loading models in background"""
-    progress_updated = pyqtSignal(int)
-    model_loaded = pyqtSignal(object, str)
-    error_occurred = pyqtSignal(str)
-    
-    def __init__(self, model_path, model_config):
-        super().__init__()
-        self.model_path = model_path
-        self.model_config = model_config
-    
-    def run(self):
-        try:
-            self.progress_updated.emit(25)
-            
-            # Create model instance
-            model = EEGModel(**self.model_config)
-            self.progress_updated.emit(50)
-            
-            # Load state dict
-            if torch.cuda.is_available():
-                state_dict = torch.load(self.model_path)
-            else:
-                state_dict = torch.load(self.model_path, map_location='cpu')
-            
-            self.progress_updated.emit(75)
-            
-            model.load_state_dict(state_dict)
-            model.eval()
-            
-            self.progress_updated.emit(100)
-            self.model_loaded.emit(model, self.model_path)
-            
-        except Exception as e:
-            self.error_occurred.emit(f"Error loading model: {str(e)}")
-
-
-class DataLoadThread(QThread):
-    """Thread for loading and preprocessing data in background"""
-    progress_updated = pyqtSignal(int)
-    data_loaded = pyqtSignal(object)
-    error_occurred = pyqtSignal(str)
-    
-    def __init__(self, data_path, subjects, runs):
-        super().__init__()
-        self.data_path = data_path
-        self.subjects = subjects
-        self.runs = runs
-    
-    def run(self):
-        try:
-            self.progress_updated.emit(20)
-            
-            # Initialize data loader
-            data_loader = BCIDataLoader(
-                data_path=self.data_path,
-                subjects=self.subjects,
-                runs=self.runs
-            )
-            
-            self.progress_updated.emit(60)
-            
-            # Load and preprocess data
-            windows, labels, subject_ids = data_loader.load_all_subjects()
-            
-            # Create data dictionary
-            data_dict = {
-                'windows': windows,
-                'labels': labels,
-                'subject_ids': subject_ids
-            }
-            
-            self.progress_updated.emit(100)
-            self.data_loaded.emit(data_dict)
-            
-        except Exception as e:
-            self.error_occurred.emit(f"Error loading data: {str(e)}")
-
-
-class PlotCanvas(FigureCanvas):
-    """Canvas for matplotlib plots"""
-    
-    def __init__(self, parent=None, width=8, height=6, dpi=100):
-        self.fig = Figure(figsize=(width, height), dpi=dpi)
-        super().__init__(self.fig)
-        self.setParent(parent)
-        
-        # Initial empty plot
-        self.axes = self.fig.add_subplot(111)
-        self.axes.set_title("No data to display")
-        self.axes.grid(True)
-        
-    def plot_eeg_data(self, data: np.ndarray, sample_rate: float, channels: Optional[list] = None, title: str = "EEG Data", baseline_duration_sec: float = 1.0):
-        """Plot EEG data with sample index on x-axis and stimulus onset line."""
-        self.axes.clear()
-        
-        if data is None:
-            self.axes.set_title("No data to display")
-            self.axes.grid(True)
-            self.draw()
-            return
-            
-        if len(data.shape) == 3:  # (trials, channels, time_points)
-            # Plot first trial if multiple are passed, though typically one window is passed
-            data = data[0]
-        
-        n_channels, n_times = data.shape
-        sample_indices = np.arange(n_times)
-        
-        # Select channels to plot (max 10 for clarity or as specified)
-        if channels is None:
-            channels_to_plot = list(range(min(10, n_channels)))
-        else:
-            channels_to_plot = [ch for ch in channels if ch < n_channels]
-
-        if not channels_to_plot: # If channels list is empty or all out of bounds
-            self.axes.set_title("No valid channels to display")
-            self.axes.grid(True)
-            self.draw()
-            return
-
-        # Define colors for the selected channels
-        colors = plt.cm.tab10(np.linspace(0, 1, len(channels_to_plot)))
-        
-        # Normalize data to enhance amplitude visibility
-        for i, ch_idx in enumerate(channels_to_plot):
-            channel_data = data[ch_idx]
-            channel_std = np.std(channel_data)
-            if channel_std > 0:
-                normalized_data = (channel_data - np.mean(channel_data)) / channel_std
-            else:
-                normalized_data = channel_data # Avoid division by zero if std is 0
-            
-            offset = i * 3  # Small offset for slight separation
-            
-            self.axes.plot(sample_indices, normalized_data + offset, color=colors[i], 
-                           label=f'Channel {ch_idx}', linewidth=1.5, alpha=0.8) # Adjusted linewidth
-        
-        # Add vertical line for stimulus onset
-        stimulus_onset_sample = int(baseline_duration_sec * sample_rate)
-        if 0 < stimulus_onset_sample < n_times:
-            self.axes.axvline(stimulus_onset_sample, color='r', linestyle='--', linewidth=1.5, label='Stimulus Onset')
-        
-        self.axes.set_xlabel('Sample Index')
-        self.axes.set_ylabel('Normalized Amplitude (Offset)')
-        self.axes.set_title(title)
-        self.axes.grid(True, alpha=0.3)
-        self.axes.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        
-        self.fig.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust layout to make space for legend
-        self.draw()
-    
-    def plot_training_progress(self, epochs, train_loss, train_acc, val_loss, val_acc):
-        """Plot training progress"""
-        self.axes.clear()
-        
-        if not epochs:
-            self.axes.set_title("No training data")
-            self.axes.grid(True)
-            self.draw()
-            return
-        
-        # Create subplots
-        self.fig.clear()
-        ax1 = self.fig.add_subplot(2, 1, 1)
-        ax2 = self.fig.add_subplot(2, 1, 2)
-        
-        # Plot loss
-        ax1.plot(epochs, train_loss, 'b-', label='Training Loss', linewidth=2)
-        ax1.plot(epochs, val_loss, 'r-', label='Validation Loss', linewidth=2)
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss')
-        ax1.set_title('Training and Validation Loss')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Plot accuracy
-        ax2.plot(epochs, train_acc, 'b-', label='Training Accuracy', linewidth=2)
-        ax2.plot(epochs, val_acc, 'r-', label='Validation Accuracy', linewidth=2)
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('Accuracy')
-        ax2.set_title('Training and Validation Accuracy')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        self.fig.tight_layout()
-        self.draw()
-    
-    def plot_prediction_results(self, data, predictions, true_labels, confidences):
-        """Plot prediction results"""
-        self.axes.clear()
-        
-        if len(predictions) == 0:
-            self.axes.set_title("No predictions to display")
-            self.axes.grid(True)
-            self.draw()
-            return
-        
-        # Plot accuracy over time
-        correct = np.array(predictions) == np.array(true_labels)
-        accuracy = np.cumsum(correct) / np.arange(1, len(correct) + 1)
-        
-        windows = np.arange(1, len(predictions) + 1)
-        
-        self.axes.plot(windows, accuracy, 'g-', linewidth=2, label='Cumulative Accuracy')
-        self.axes.axhline(y=0.5, color='k', linestyle='--', alpha=0.5, label='Chance Level')
-        
-        self.axes.set_xlabel('Window Number')
-        self.axes.set_ylabel('Accuracy')
-        self.axes.set_title(f'Prediction Accuracy (Overall: {accuracy[-1]:.3f})')
-        self.axes.legend()
-        self.axes.grid(True, alpha=0.3)
-        
-        self.fig.tight_layout()
-        self.draw()
-
-
 class BCIMainWindow(QMainWindow):
+    
     """Main window for BCI GUI application with tabs for data loading, training, and testing"""
     
     def __init__(self, parent=None):
@@ -432,9 +104,8 @@ class BCIMainWindow(QMainWindow):
         self.subject_layout = QVBoxLayout(scroll_widget)
         self.subject_checkboxes = {}
         
-        # Initialize data loader to get available subjects
-        self.data_loader = BCIDataLoader(data_path="eeg_data")
-        available_subjects = self.data_loader.get_available_subjects()
+        # Initialize available subjects (1-109 based on the codebase)
+        available_subjects = list(range(1, 110))
         
         for subject_id in available_subjects:
             checkbox = QCheckBox(f"Subject {subject_id:03d}")
@@ -764,12 +435,11 @@ class BCIMainWindow(QMainWindow):
         title = f"Sample {self.current_sample_idx + 1}/{len(self.filtered_indices)} - Subject {subject_id:03d} - {'Left Hand' if label == 0 else 'Right Hand'}"
         
         # Pass the sample_rate from the data_loader
-        # The baseline_duration_sec will use its default of 1.0s, matching BCIDataLoader's default
+        # Use standard EEG sample rate of 125 Hz
         self.plot_canvas.plot_eeg_data(sample_data, 
-                                       sample_rate=self.data_loader.sample_rate, 
+                                       sample_rate=125, 
                                        channels=channels_to_plot, 
                                        title=title)
-        self._update_data_info()
     
     def _set_navigation_enabled(self, enabled):
         """Enable/disable navigation controls"""
