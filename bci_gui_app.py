@@ -246,7 +246,7 @@ class PlotCanvas(FigureCanvas):
         self.axes.grid(True)
         
     def plot_eeg_data(self, data, sfreq=160.0, channels=None, title="EEG Data"):
-        """Plot EEG data"""
+        """Plot EEG data with overlapping channels for better amplitude visibility"""
         self.axes.clear()
         
         if data is None:
@@ -266,17 +266,29 @@ class PlotCanvas(FigureCanvas):
         if channels is None:
             channels = list(range(min(10, n_channels)))
         
+        # Define colors for all channels
         colors = plt.cm.tab10(np.linspace(0, 1, len(channels)))
         
+        # Normalize data to enhance amplitude visibility
         for i, ch in enumerate(channels):
             if ch < n_channels:
-                # Offset each channel for visibility
-                offset = i * 50
-                self.axes.plot(time, data[ch] + offset, color=colors[i], 
-                             label=f'Channel {ch}', linewidth=0.8)
+                # Normalize each channel to standard deviation for better amplitude visibility
+                channel_data = data[ch]
+                # Standardize the data to make amplitude variations more visible
+                channel_std = np.std(channel_data)
+                if channel_std > 0:
+                    normalized_data = (channel_data - np.mean(channel_data)) / channel_std
+                else:
+                    normalized_data = channel_data
+                
+                # Small offset for slight separation while maintaining overlap
+                offset = i * 3  # Much smaller offset for overlapping effect
+                
+                self.axes.plot(time, normalized_data + offset, color=colors[i], 
+                             label=f'Channel {ch}', linewidth=2.0, alpha=0.8)
         
         self.axes.set_xlabel('Time (s)')
-        self.axes.set_ylabel('Amplitude (µV)')
+        self.axes.set_ylabel('Normalized Amplitude')
         self.axes.set_title(title)
         self.axes.grid(True, alpha=0.3)
         self.axes.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
