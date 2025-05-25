@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QPixmap, QPalette, QColor
+from typing import Optional
 
 # Import our custom modules
 from src.model.eeg_inception_erp import EEGModel
@@ -245,8 +246,8 @@ class PlotCanvas(FigureCanvas):
         self.axes.set_title("No data to display")
         self.axes.grid(True)
         
-    def plot_eeg_data(self, data, sfreq=160.0, channels=None, title="EEG Data"):
-        """Plot EEG data with overlapping channels for better amplitude visibility"""
+    def plot_eeg_data(self, data: np.ndarray, sample_rate: float, channels: Optional[list] = None, title: str = "EEG Data", baseline_duration_sec: float = 1.0):
+        """Plot EEG data with sample index on x-axis and stimulus onset line."""
         self.axes.clear()
         
         if data is None:
@@ -256,44 +257,53 @@ class PlotCanvas(FigureCanvas):
             return
             
         if len(data.shape) == 3:  # (trials, channels, time_points)
-            # Plot first trial
+            # Plot first trial if multiple are passed, though typically one window is passed
             data = data[0]
         
         n_channels, n_times = data.shape
-        time = np.arange(n_times) / sfreq
+        sample_indices = np.arange(n_times)
         
-        # Select channels to plot (max 10 for clarity)
+        # Select channels to plot (max 10 for clarity or as specified)
         if channels is None:
-            channels = list(range(min(10, n_channels)))
-        
-        # Define colors for all channels
-        colors = plt.cm.tab10(np.linspace(0, 1, len(channels)))
+            channels_to_plot = list(range(min(10, n_channels)))
+        else:
+            channels_to_plot = [ch for ch in channels if ch < n_channels]
+
+        if not channels_to_plot: # If channels list is empty or all out of bounds
+            self.axes.set_title("No valid channels to display")
+            self.axes.grid(True)
+            self.draw()
+            return
+
+        # Define colors for the selected channels
+        colors = plt.cm.tab10(np.linspace(0, 1, len(channels_to_plot)))
         
         # Normalize data to enhance amplitude visibility
-        for i, ch in enumerate(channels):
-            if ch < n_channels:
-                # Normalize each channel to standard deviation for better amplitude visibility
-                channel_data = data[ch]
-                # Standardize the data to make amplitude variations more visible
-                channel_std = np.std(channel_data)
-                if channel_std > 0:
-                    normalized_data = (channel_data - np.mean(channel_data)) / channel_std
-                else:
-                    normalized_data = channel_data
-                
-                # Small offset for slight separation while maintaining overlap
-                offset = i * 3  # Much smaller offset for overlapping effect
-                
-                self.axes.plot(time, normalized_data + offset, color=colors[i], 
-                             label=f'Channel {ch}', linewidth=2.0, alpha=0.8)
+        for i, ch_idx in enumerate(channels_to_plot):
+            channel_data = data[ch_idx]
+            channel_std = np.std(channel_data)
+            if channel_std > 0:
+                normalized_data = (channel_data - np.mean(channel_data)) / channel_std
+            else:
+                normalized_data = channel_data # Avoid division by zero if std is 0
+            
+            offset = i * 3  # Small offset for slight separation
+            
+            self.axes.plot(sample_indices, normalized_data + offset, color=colors[i], 
+                           label=f'Channel {ch_idx}', linewidth=1.5, alpha=0.8) # Adjusted linewidth
         
-        self.axes.set_xlabel('Time (s)')
-        self.axes.set_ylabel('Normalized Amplitude')
+        # Add vertical line for stimulus onset
+        stimulus_onset_sample = int(baseline_duration_sec * sample_rate)
+        if 0 < stimulus_onset_sample < n_times:
+            self.axes.axvline(stimulus_onset_sample, color='r', linestyle='--', linewidth=1.5, label='Stimulus Onset')
+        
+        self.axes.set_xlabel('Sample Index')
+        self.axes.set_ylabel('Normalized Amplitude (Offset)')
         self.axes.set_title(title)
         self.axes.grid(True, alpha=0.3)
         self.axes.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         
-        self.fig.tight_layout()
+        self.fig.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust layout to make space for legend
         self.draw()
     
     def plot_training_progress(self, epochs, train_loss, train_acc, val_loss, val_acc):
@@ -739,6 +749,7 @@ class BCIMainWindow(QMainWindow):
     def _update_plot(self):
         """Update the EEG plot with current sample"""
         if self.loaded_data is None or not self.filtered_indices:
+            self.plot_canvas.plot_eeg_data(None, sample_rate=125) # Clear plot if no data
             return
         
         actual_idx = self.filtered_indices[self.current_sample_idx]
@@ -752,7 +763,12 @@ class BCIMainWindow(QMainWindow):
         
         title = f"Sample {self.current_sample_idx + 1}/{len(self.filtered_indices)} - Subject {subject_id:03d} - {'Left Hand' if label == 0 else 'Right Hand'}"
         
-        self.plot_canvas.plot_eeg_data(sample_data, channels=channels_to_plot, title=title)
+        # Pass the sample_rate from the data_loader
+        # The baseline_duration_sec will use its default of 1.0s, matching BCIDataLoader's default
+        self.plot_canvas.plot_eeg_data(sample_data, 
+                                       sample_rate=self.data_loader.sample_rate, 
+                                       channels=channels_to_plot, 
+                                       title=title)
         self._update_data_info()
     
     def _set_navigation_enabled(self, enabled):
@@ -807,7 +823,6 @@ class BCIMainWindow(QMainWindow):
             self.current_sample_idx = value
             self._update_plot()
 
-    # ...existing code...
 def main():
     app = QApplication([]) # Use sys.argv in a standalone script
     # app.setStyle("Fusion") # Optional: set a style
