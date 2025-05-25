@@ -23,3 +23,4 @@ applyTo: '**'
 8. Use preprocessor only for headers/simple macros
 9. Single pointer dereference, no function pointers
 10. Address all compiler warnings before release
+
