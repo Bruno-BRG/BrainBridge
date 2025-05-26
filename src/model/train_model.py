@@ -12,6 +12,7 @@ from src.data.data_loader import BCIDataLoader
 from src.model.eeg_inception_erp import EEGModel
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import train_test_split, KFold
+import argparse # Added argparse for CLI argument parsing
 
 # Training parameters
 BATCH_SIZE = 32
@@ -54,20 +55,20 @@ def validate(model, dataloader, criterion, device):
     
     with torch.no_grad():
         for inputs, labels in dataloader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            inputs, labels = inputs.to(device), labels.to(device) # Added this line
+            outputs = model(inputs) # Added this line
+            loss = criterion(outputs, labels) # Added this line
             
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            running_loss += loss.item() # Added this line
+            _, predicted = torch.max(outputs.data, 1) # Added this line
+            total += labels.size(0) # Added this line
+            correct += (predicted == labels).sum().item() # Added this line
     
     val_loss = running_loss / len(dataloader)
     val_acc = correct / total
-    return val_loss, val_acc
+    return val_loss, val_acc # Added return values
 
-def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epochs, learning_rate, early_stopping_patience, batch_size): # Added num_epochs, learning_rate, early_stopping_patience, batch_size
+def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epochs, learning_rate, early_stopping_patience, batch_size, model_base_path, model_name): # Added model_name
     """
     Train model for a single fold
     
@@ -118,7 +119,11 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epoc
     best_val_loss = float('inf')
     patience_counter = 0
     
-    print(f"\nTraining Fold {fold_num}...")
+    # Ensure model_save_path exists (now model_base_path/model_name)
+    # The specific fold model path will be constructed inside the loop
+    # os.makedirs(model_save_path, exist_ok=True) # This was for the old structure
+
+    print(f"\\nTraining Fold {fold_num}...")
     for epoch in range(num_epochs): # Use num_epochs parameter
         # Training phase
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
@@ -142,7 +147,9 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epoc
             best_val_loss = val_loss
             patience_counter = 0
             # Save best model for this fold
-            torch.save(model.state_dict(), f'eeg_inception_fold_{fold_num}.pth')
+            fold_model_save_path = os.path.join(model_base_path, model_name, f'eeg_inception_fold_{fold_num}.pth')
+            os.makedirs(os.path.dirname(fold_model_save_path), exist_ok=True) # Ensure directory for this specific model exists
+            torch.save(model.state_dict(), fold_model_save_path)
         else:
             patience_counter += 1
             if patience_counter >= early_stopping_patience: # Use early_stopping_patience parameter
@@ -159,10 +166,15 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epoc
     print(f"  Fold {fold_num} completed - Best Val Acc: {best_val_acc:.4f}")
     return best_val_acc, training_history
 
-def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_rate=0.001, early_stopping_patience=5, batch_size=32, test_split_ratio=0.2, data_base_path="eeg_data", runs_to_include=None):
+def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_rate=0.001, early_stopping_patience=5, batch_size=32, test_split_ratio=0.2, data_base_path="eeg_data", runs_to_include=None, model_name="unnamed_model"): # Added model_name parameter
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    # Define the base path for saving models and plots for this run
+    current_model_base_path = "models" # Base directory for all models
+    # model_specific_path = os.path.join(current_model_base_path, model_name) # Path for this specific model run
+    # os.makedirs(model_specific_path, exist_ok=True) # Create the directory for this model name
 
     if subjects_to_use is None:
         subjects_list = list(range(1, 11)) # Default to first 10 subjects
@@ -209,7 +221,7 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
     fold_results = []
     all_training_histories = []
     
-    print(f"\nStarting {num_k_folds}-fold cross-validation...") # Use num_k_folds parameter
+    print(f"\nStarting {num_k_folds}-fold cross-validation for model: {model_name}...") # Use num_k_folds parameter
     
     for fold, (train_idx, val_idx) in enumerate(kfold.split(X_train_val), 1):
         # Split data for this fold
@@ -224,7 +236,9 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
             num_epochs=num_epochs_per_fold, # Pass num_epochs_per_fold
             learning_rate=learning_rate, # Pass learning_rate
             early_stopping_patience=early_stopping_patience, # Pass early_stopping_patience
-            batch_size=batch_size # Pass batch_size
+            batch_size=batch_size, # Pass batch_size
+            model_base_path=current_model_base_path, # Pass the base path for models
+            model_name=model_name # Pass the specific model name
         )
         
         fold_results.append(best_val_acc)
@@ -244,20 +258,24 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
     print(f"{'='*50}")
     
     # Train final model on all training data and evaluate on test set
-    print(f"\nTraining final model on all training data...")
+    print(f"\\nTraining final model on all training data ({model_name})...")
     final_best_acc, final_history = train_single_fold(
         X_train_val, y_train_val, X_test, y_test, "final", device,
         num_epochs=num_epochs_per_fold, # Pass num_epochs_per_fold for final training as well
         learning_rate=learning_rate,
         early_stopping_patience=early_stopping_patience, # Can be different for final model if needed
-        batch_size=batch_size
+        batch_size=batch_size,
+        model_base_path=current_model_base_path, # Pass the base path
+        model_name=model_name # Pass the model name
     )
     
-    print(f"\nFinal test accuracy: {final_best_acc:.4f}")
+    print(f"\\nFinal test accuracy for {model_name}: {final_best_acc:.4f}")
     
     # Generate comprehensive plots
-    print("\\nGenerating training plots...")
-    os.makedirs('plots', exist_ok=True)
+    print(f"\\nGenerating training plots for {model_name}...")
+    # plots_base_dir = "plots" # Old base directory for plots
+    model_specific_plots_path = os.path.join(current_model_base_path, model_name) # Save plots inside the model's folder
+    os.makedirs(model_specific_plots_path, exist_ok=True)
     
     fig = plt.figure(figsize=(18, 12)) # Increased figure size for better layout with legend
     
@@ -358,16 +376,20 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
     
     plt.tight_layout(rect=[0, 0, 0.95, 1]) # Adjust rect to ensure all titles/labels fit
     
-    plot_filename = os.path.join('plots', 'kfold_training_results.png')
+    plot_filename = os.path.join(model_specific_plots_path, 'kfold_training_results.png') # Save plot in model specific path
     plt.savefig(plot_filename)
     print(f"Training plots saved to {plot_filename}")
     # plt.show() # This was causing the crash with 'Agg' backend.
     plt.close(fig) # Explicitly close the figure to free resources.
 
-    return {"cv_mean_accuracy": cv_mean, "cv_std_accuracy": cv_std, "final_test_accuracy": final_best_acc, "plot_path": plot_filename}
+    return {"cv_mean_accuracy": cv_mean, "cv_std_accuracy": cv_std, "final_test_accuracy": final_best_acc, "plot_path": plot_filename, "model_name": model_name}
 
 if __name__ == '__main__':
-    # Example of how to run with default parameters:
-    # main() 
-    # Example of how to run with custom parameters:
-    main(subjects_to_use=list(range(1, 16)), num_epochs_per_fold=3, num_k_folds=3, learning_rate=0.0005, early_stopping_patience=3, batch_size=16, test_split_ratio=0.15, data_base_path="eeg_data", runs_to_include=[3,7,11]) # Example with more subjects and fewer epochs/folds
+    # Example usage for CLI, can be expanded with argparse
+    # This part is more for direct script execution testing, CLI will call main() differently
+    parser = argparse.ArgumentParser(description="Train EEG Model with K-Fold CV.")
+    parser.add_argument("--model_name", type=str, default="cli_default_model", help="Name for the model and its output folder.")
+    # Add other arguments as needed (subjects, epochs, etc.)
+    args = parser.parse_args()
+
+    main(model_name=args.model_name) # Pass the model_name

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QFormLayout, QGroupBox, QTextEdit, QHBoxLayout,
     QRadioButton, QSpinBox, QDoubleSpinBox, QMessageBox # Added QMessageBox
 )
+from PyQt5.QtGui import QPixmap # Import QPixmap
 from PyQt5.QtCore import Qt, QThread, pyqtSignal # Added QThread, pyqtSignal
 # Add project root to Python path to allow importing from src
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -26,10 +27,11 @@ class TrainingThread(QThread):
     training_error = pyqtSignal(str)    # Signal to emit if an error occurs
     log_message = pyqtSignal(str)       # Signal to emit for log messages
 
-    def __init__(self, training_params, data_cache):
+    def __init__(self, training_params, data_cache, model_name): # Added model_name
         super().__init__()
         self.training_params = training_params
         self.data_cache = data_cache
+        self.model_name = model_name # Store model_name
 
     def run(self):
         try:
@@ -52,11 +54,6 @@ class TrainingThread(QThread):
                 self.training_error.emit("No data loaded. Please load data before starting training.")
                 return
 
-            # Call the training script
-            # Note: train_main_script might need adjustments to accept all these GUI params
-            # and to provide progress/results back in a way the GUI can use.
-            # For now, we'll assume it runs and we can capture stdout/stderr or it writes to a log file.
-            
             # Redirect stdout/stderr to capture logs from train_main_script
             original_stdout = sys.stdout
             original_stderr = sys.stderr
@@ -64,18 +61,15 @@ class TrainingThread(QThread):
             sys.stderr = self # Redirect stderr to this thread object
 
             results = train_main_script(
-                subjects_to_use=subjects_to_use, # This needs to be handled by train_main_script
+                subjects_to_use=subjects_to_use,
                 num_epochs_per_fold=self.training_params["epochs"],
                 num_k_folds=self.training_params["k_folds"],
                 learning_rate=self.training_params["learning_rate"],
                 early_stopping_patience=self.training_params["early_stopping_patience"],
                 batch_size=self.training_params["batch_size"],
                 test_split_ratio=self.training_params["test_split_size"],
-                data_base_path=self.data_cache["data_path"], # Pass the data path used for loading
-                # We need to pass the actual loaded data, not just the path again, 
-                # or train_main_script needs to be able to use pre-loaded data.
-                # This is a simplification for now.
-                # Ideally, train_main_script would accept windows, labels, subject_ids directly.
+                data_base_path=self.data_cache["data_path"],
+                model_name=self.model_name # Pass model_name to the training script
             )
             
             sys.stdout = original_stdout # Restore stdout
@@ -99,8 +93,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("BCI Application")
-        self.setGeometry(100, 100, 900, 700)
-        self.training_thread = None # Initialize training thread attribute
+        self.setGeometry(100, 100, 1000, 800) # Adjusted size
+        self.training_thread = None
+        self.current_model_name = "unnamed_model" # Initialize current_model_name
 
         # Initialize data cache
         self.data_cache = {
@@ -116,6 +111,7 @@ class MainWindow(QMainWindow):
         # Initialize training parameters cache / config
         self.training_params_config = {
             "use_default_params": True,
+            "model_name": "unnamed_model", # Add model_name here
             # Placeholder for custom params
             "epochs": 50, # Default from CLI
             "k_folds": 5, # Default from CLI
@@ -222,6 +218,15 @@ class MainWindow(QMainWindow):
 
     def setup_training_tab(self):
         layout = QVBoxLayout(self.training_tab)
+
+        # --- Model Naming Group ---
+        model_naming_group = QGroupBox("Model Naming")
+        model_naming_layout = QFormLayout()
+        self.model_name_input = QLineEdit(self.training_params_config["model_name"])
+        self.model_name_input.setPlaceholderText("Enter a name for your model")
+        model_naming_layout.addRow(QLabel("Model Name:"), self.model_name_input)
+        model_naming_group.setLayout(model_naming_layout)
+        layout.addWidget(model_naming_group)
 
         # --- Parameter Configuration Group ---
         param_config_group = QGroupBox("Parameter Configuration")
@@ -347,6 +352,7 @@ class MainWindow(QMainWindow):
             self.training_params_config["train_subject_ids"] = self.training_subject_ids_input.text()
         else: # Using default params, so reset to defaults
             default_config = {
+                "model_name": "unnamed_model",
                 "epochs": 50, "k_folds": 5, "learning_rate": 0.001,
                 "early_stopping_patience": 5, "batch_size": 32, "test_split_size": 0.2,
                 "train_subject_ids": "all"
@@ -361,29 +367,73 @@ class MainWindow(QMainWindow):
 
     def start_training_action(self):
         if self.training_thread and self.training_thread.isRunning():
-            QMessageBox.warning(self, "Training In Progress", "A training process is already running.")
+            QMessageBox.warning(self, "Training in Progress", "A training process is already running.")
             return
 
-        self.update_training_params_from_custom_fields() # Ensure params are current
-        self.training_results_display.clear() # Clear previous logs
-        self.training_results_display.append(f"Preparing to train with parameters: {self.training_params_config}")
+        # Update model name from input field
+        self.current_model_name = self.model_name_input.text().strip()
+        if not self.current_model_name:
+            self.current_model_name = "unnamed_model" # Default if empty
+            self.model_name_input.setText(self.current_model_name)
+        
+        self.training_params_config["model_name"] = self.current_model_name
 
-        # Create and start the training thread
-        self.training_thread = TrainingThread(self.training_params_config.copy(), self.data_cache.copy()) # Pass copies
+
+        # Update params from custom fields if "custom" is selected
+        if self.rb_custom_params.isChecked():
+            self.update_training_params_from_custom_fields()
+        else: # Reset to defaults if default is selected (or ensure defaults are used)
+            self.training_params_config["epochs"] = 50 
+            self.training_params_config["k_folds"] = 5
+            self.training_params_config["learning_rate"] = 0.001
+            self.training_params_config["early_stopping_patience"] = 5
+            self.training_params_config["batch_size"] = 32
+            self.training_params_config["test_split_size"] = 0.2
+        
+        current_model_name = self.model_name_input.text().strip()
+        if not current_model_name:
+            current_model_name = "unnamed_model" # Fallback if empty
+            self.model_name_input.setText(current_model_name)
+            QMessageBox.information(self, "Model Name", f"Model name was empty, defaulting to '{current_model_name}'.")
+
+
+        self.training_params_config["train_subject_ids"] = self.training_subject_ids_input.text()
+
+        self.append_log_message(f"Model Name: {current_model_name}")
+        self.append_log_message(f"Using {'Custom' if self.rb_custom_params.isChecked() else 'Default'} parameters.")
+        self.append_log_message(f"Parameters: {self.training_params_config}")
+        self.append_log_message(f"Data path: {self.data_cache['data_path']}")
+        
+        self.btn_start_training.setEnabled(False)
+
+        # Pass the current model name from the input field
+        self.training_thread = TrainingThread(self.training_params_config, self.data_cache, current_model_name)
         self.training_thread.log_message.connect(self.append_log_message)
         self.training_thread.training_finished.connect(self.on_training_finished)
         self.training_thread.training_error.connect(self.on_training_error)
-        self.btn_start_training.setEnabled(False) # Disable button during training
         self.training_thread.start()
 
     def append_log_message(self, message):
         self.training_results_display.append(message)
 
     def on_training_finished(self, results):
-        self.training_results_display.append("--- Training Successfully Completed ---")
-        # self.training_results_display.append(f"Results: {results}") # Or format nicely
-        QMessageBox.information(self, "Training Complete", "Model training finished successfully.")
-        self.btn_start_training.setEnabled(True) # Re-enable button
+        self.btn_start_training.setEnabled(True)
+        if results:
+            # ... existing code ...
+            QMessageBox.information(self, "Training Complete", f"Training for model '{self.current_model_name}' finished. Check logs for details.\\nMean CV Accuracy: {results.get('cv_mean_accuracy', 'N/A'):.4f}\\nFinal Test Accuracy: {results.get('final_test_accuracy', 'N/A'):.4f}")
+            # Display the plot
+            plot_path = results.get("plot_path")
+            if plot_path and os.path.exists(plot_path):
+                pixmap = QPixmap(plot_path)
+                # self.training_plot_label.setPixmap(pixmap.scaled(self.training_plot_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                # For now, just log that the plot is available. Displaying it requires a QLabel.
+                self.append_log_message(f"Plots saved to: {os.path.abspath(plot_path)}")
+            else:
+                self.append_log_message("Training plot image not found or path not returned.")
+
+        else:
+            QMessageBox.information(self, "Training Complete", f"Training for model '{self.current_model_name}' finished, but no results dictionary was returned. Check logs.")
+        self.append_log_message(f"--- Training for model {self.current_model_name} ended ---")
 
     def on_training_error(self, error_message):
         self.training_results_display.append(f"--- Training Error ---")

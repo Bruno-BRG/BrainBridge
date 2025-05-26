@@ -131,6 +131,7 @@ def handle_model_training_cli():
     print("\n--- Model Training Menu ---")
     global loaded_data_cache
 
+    default_model_name = "cli_trained_model"
     default_num_epochs = 50
     default_k_folds = 5
     default_lr = 0.001
@@ -146,77 +147,70 @@ def handle_model_training_cli():
         choice = input("Enter your choice: ")
 
         if choice == '1' or choice == '2':
-            subjects_to_pass_to_train_script = None
-            data_path_for_training = loaded_data_cache["data_path"] # Default to cached path
+            if loaded_data_cache["windows"] is None:
+                print("No data loaded. Please load data first from the Data Management menu.")
+                continue
 
-            if loaded_data_cache["windows"] is not None and loaded_data_cache["labels"] is not None:
-                # Data was loaded via CLI Data Management
-                subjects_from_cache = loaded_data_cache["subjects_list"]
-                data_path_for_training = loaded_data_cache["data_path"] # Use the path from which data was loaded
-
-                if subjects_from_cache is None: # 'all' was selected in data loading
-                    subjects_to_pass_to_train_script = 'all'
-                    print(f"Using ALL subjects from the data previously loaded from: {data_path_for_training}")
-                else: # A specific list of subjects was loaded
-                    subjects_to_pass_to_train_script = subjects_from_cache
-                    print(f"Using subjects {subjects_to_pass_to_train_script} from the data previously loaded from: {data_path_for_training}")
-            else:
-                # No data loaded via CLI, or loading was incomplete.
-                # Training script will load its own data. Prompt for subject configuration.
-                print(f"Warning: No data pre-loaded via CLI menu or loading was incomplete.")
-                print(f"Training script will attempt to load data from: {data_path_for_training}")
-                
-                prompt_text = (
-                    f"Enter subject IDs for training (e.g., 1,2,3 or 'all' for all subjects from '{data_path_for_training}',\\n"
-                    f"or press Enter for default: 1-10 subjects): "
-                )
-                subjects_str_train = input(prompt_text)
-
-                if not subjects_str_train: # User pressed Enter
-                    subjects_to_pass_to_train_script = None # Triggers default 1-10 in train_model.py
-                    print("Using default subjects (1-10) for training.")
-                elif subjects_str_train.lower() == 'all':
-                    subjects_to_pass_to_train_script = 'all'
-                    print(f"Attempting to use ALL available subjects from {data_path_for_training}.")
-                else:
-                    try:
-                        subjects_to_pass_to_train_script = [int(s.strip()) for s in subjects_str_train.split(',')]
-                        print(f"Using specified subjects: {subjects_to_pass_to_train_script} from {data_path_for_training}.")
-                    except ValueError:
-                        print("Invalid subject IDs. Training will use default subjects (1-10).")
-                        subjects_to_pass_to_train_script = None
+            model_name_input = default_model_name
+            num_epochs = default_num_epochs
+            k_folds = default_k_folds
+            lr = default_lr
+            early_stop = default_early_stop_patience
+            batch_s = default_batch_size
+            test_s = default_test_split
+            subjects_for_training_str = "all"
 
             if choice == '1': # Custom parameters
-                print("\n--- Configure Training Parameters ---")
+                print("\n--- Custom Training Parameters ---")
+                model_name_input = input(f"Enter model name (default: {default_model_name}): ") or default_model_name
                 num_epochs = get_int_input("Number of epochs per fold", default_num_epochs)
                 k_folds = get_int_input("Number of K-folds", default_k_folds)
                 lr = get_float_input("Learning rate", default_lr)
                 early_stop = get_int_input("Early stopping patience", default_early_stop_patience)
-                batch_size = get_int_input("Batch size", default_batch_size)
-                test_split = get_float_input("Test set split ratio", default_test_split)
-                print("-----------------------------------")
+                batch_s = get_int_input("Batch size", default_batch_size)
+                test_s = get_float_input("Test split ratio", default_test_split)
+                subjects_for_training_str = input(f"Enter subject IDs for training (e.g., 1,2,3 or 'all', default: all): ") or "all"
             else: # Default parameters
-                num_epochs = default_num_epochs
-                k_folds = default_k_folds
-                lr = default_lr
-                early_stop = default_early_stop_patience
-                batch_size = default_batch_size
-                test_split = default_test_split
-                print("Using default training parameters.")
+                print("\n--- Using Default Training Parameters ---")
+                model_name_input = default_model_name # Ensure default name is used if not custom
+            
+            subjects_to_use_for_training = None
+            if subjects_for_training_str.lower() != 'all':
+                try:
+                    subjects_to_use_for_training = [int(s.strip()) for s in subjects_for_training_str.split(',')]
+                except ValueError:
+                    print(f"Invalid subject IDs format: {subjects_for_training_str}. Defaulting to all loaded subjects.")
+                    subjects_to_use_for_training = loaded_data_cache.get("subjects_list", None) # Fallback to loaded subjects
+            else:
+                subjects_to_use_for_training = loaded_data_cache.get("subjects_list", None) # Use all loaded subjects if 'all'
 
-            print("\nStarting training...")
+            print(f"\nStarting training for model: {model_name_input}...")
             try:
-                train_main_script(
-                    subjects_to_use=subjects_to_pass_to_train_script, # Use the determined subjects
+                results = train_main_script(
+                    subjects_to_use=subjects_to_use_for_training, 
                     num_epochs_per_fold=num_epochs,
                     num_k_folds=k_folds,
                     learning_rate=lr,
                     early_stopping_patience=early_stop,
-                    batch_size=batch_size,
-                    test_split_ratio=test_split,
-                    data_base_path=data_path_for_training # Pass the data path used in CLI data loading
+                    batch_size=batch_s,
+                    test_split_ratio=test_s,
+                    data_base_path=loaded_data_cache["data_path"],
+                    model_name=model_name_input # Pass the model name
                 )
-                print("Training process completed. Check console output and generated files (plots, models).")
+                print("\n--- Training Completed ---")
+                if isinstance(results, dict):
+                    print(f"  Mean CV Accuracy: {results.get('cv_mean_accuracy', 'N/A'):.4f}")
+                    print(f"  CV Std Dev: {results.get('cv_std_accuracy', 'N/A'):.4f}")
+                    print(f"  Final Test Accuracy: {results.get('final_test_accuracy', 'N/A'):.4f}")
+                    plot_path = results.get("plot_path")
+                    model_dir = results.get("model_path")
+                    if plot_path:
+                        print(f"  Plots saved to: {os.path.abspath(plot_path)}")
+                    if model_dir:
+                        print(f"  Model artifacts saved in: {os.path.abspath(model_dir)}")
+                else:
+                    print(f"Training finished, but results format is unexpected: {results}")
+
             except Exception as e:
                 print(f"An error occurred during training: {e}")
                 import traceback
