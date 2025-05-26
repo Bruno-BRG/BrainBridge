@@ -1,2 +1,2 @@
 @echo off
-python launch_bci.py --mode train
+python launch_bci.py --mode cli

@@ -22,12 +22,34 @@ loaded_data_cache = {
     "windows": None,
     "labels": None,
     "subject_ids": None,
-    "data_summary": "No data loaded yet."
+    "data_summary": "No data loaded yet.",
+    "data_path": "eeg_data", # Store data path for reuse
+    "subjects_list": None # Store subject list for reuse
 }
+
+def get_int_input(prompt, default_value):
+    while True:
+        try:
+            value_str = input(f"{prompt} (default: {default_value}): ")
+            if not value_str:
+                return default_value
+            return int(value_str)
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+
+def get_float_input(prompt, default_value):
+    while True:
+        try:
+            value_str = input(f"{prompt} (default: {default_value}): ")
+            if not value_str:
+                return default_value
+            return float(value_str)
+        except ValueError:
+            print("Invalid input. Please enter a number.")
 
 def handle_data_loading_cli():
     print("\n--- Data Loading Menu ---")
-    global loaded_data_cache # Ensure we can access and potentially modify it
+    global loaded_data_cache
     while True:
         print("1. Load/Process EEG Data")
         print("2. View Data Summary")
@@ -35,28 +57,39 @@ def handle_data_loading_cli():
         choice = input("Enter your choice: ")
         if choice == '1':
             print("Calling data loading function...")
-            data_path = input("Enter path to EEG data directory (e.g., eeg_data): ")
-            if not os.path.isdir(data_path):
-                # Try to prepend project root if it's a relative path from project root
-                potential_path = os.path.join(project_root, data_path)
+            data_path_input = input(f"Enter path to EEG data directory (default: {loaded_data_cache['data_path']}): ")
+            if data_path_input:
+                loaded_data_cache['data_path'] = data_path_input
+            
+            data_path_to_check = loaded_data_cache['data_path']
+            if not os.path.isdir(data_path_to_check):
+                potential_path = os.path.join(project_root, data_path_to_check)
                 if os.path.isdir(potential_path):
-                    data_path = potential_path
+                    loaded_data_cache['data_path'] = potential_path
                 else:
-                    print(f"Error: Data directory '{data_path}' not found.")
+                    print(f"Error: Data directory '{data_path_to_check}' not found.")
                     continue
 
-            subjects_str = input("Enter subject IDs (comma-separated, e.g., 1,2,3 or 'all' for all available): ")
-            subjects_list = None
-            if subjects_str.lower() != 'all':
+            subjects_str = input("Enter subject IDs (comma-separated, e.g., 1,2,3 or 'all' for all available, press Enter for previously used or default): ")
+            
+            current_subjects_display = 'all' if loaded_data_cache["subjects_list"] is None else ",".join(map(str, loaded_data_cache["subjects_list"]))
+            if not subjects_str: # User pressed Enter
+                subjects_list_for_loader = loaded_data_cache["subjects_list"] # Use cached or default (None for all)
+                print(f"Using previously specified subjects: {current_subjects_display if subjects_list_for_loader else 'all'}")
+            elif subjects_str.lower() == 'all':
+                subjects_list_for_loader = None
+                loaded_data_cache["subjects_list"] = None # Update cache
+            else:
                 try:
-                    subjects_list = [int(s.strip()) for s in subjects_str.split(',')]
+                    subjects_list_for_loader = [int(s.strip()) for s in subjects_str.split(',')]
+                    loaded_data_cache["subjects_list"] = subjects_list_for_loader # Update cache
                 except ValueError:
-                    print("Error: Invalid subject IDs. Please enter comma-separated numbers.")
+                    print("Error: Invalid subject IDs. Please enter comma-separated numbers or 'all'.")
                     continue
             
             try:
-                print(f"Loading data from: {data_path}, Subjects: {subjects_str}")
-                loader = BCIDataLoader(data_path=data_path, subjects=subjects_list)
+                print(f"Loading data from: {loaded_data_cache['data_path']}, Subjects: {subjects_str if subjects_str else current_subjects_display}")
+                loader = BCIDataLoader(data_path=loaded_data_cache['data_path'], subjects=loaded_data_cache["subjects_list"])
                 windows, labels, subject_ids = loader.load_all_subjects()
 
                 if windows.size == 0:
@@ -96,39 +129,103 @@ def handle_data_loading_cli():
 
 def handle_model_training_cli():
     print("\n--- Model Training Menu ---")
-    global loaded_data_cache # Ensure we can access and potentially modify it
+    global loaded_data_cache
 
-    # Check if data is loaded, not strictly necessary if train_main_script handles its own loading
-    # but good for user feedback if they expect CLI loaded data to be used.
-    if loaded_data_cache["windows"] is None or loaded_data_cache["labels"] is None:
-        print("Warning: No data has been loaded via the CLI Data Management menu.")
-        print("The training script will attempt to load its default dataset.")
+    default_num_epochs = 50
+    default_k_folds = 5
+    default_lr = 0.001
+    default_early_stop_patience = 5
+    default_batch_size = 32
+    default_test_split = 0.2
 
     while True:
-        print("1. Start Full Training (K-Fold CV + Final Model + Test Evaluation)")
-        print("2. View Last Training Results (Not Implemented Yet)")
-        print("3. Back to Main Menu")
+        print("1. Start Training with Custom Parameters")
+        print("2. Start Training with Default Parameters")
+        print("3. View Last Training Results (Not Implemented Yet)")
+        print("4. Back to Main Menu")
         choice = input("Enter your choice: ")
 
-        if choice == '1':
-            print("Configuring and starting training...")
-            try:
-                print("Starting full training process (as defined in train_model.py)...")
-                print("This will use its own data loading (from 'eeg_data', subjects 1-10), splitting, K-Fold CV, final model training, and evaluation.")
-                
-                train_main_script() 
-                
-                print("Training process completed. Check console output and generated files (plots, models).")
+        if choice == '1' or choice == '2':
+            subjects_to_pass_to_train_script = None
+            data_path_for_training = loaded_data_cache["data_path"] # Default to cached path
 
+            if loaded_data_cache["windows"] is not None and loaded_data_cache["labels"] is not None:
+                # Data was loaded via CLI Data Management
+                subjects_from_cache = loaded_data_cache["subjects_list"]
+                data_path_for_training = loaded_data_cache["data_path"] # Use the path from which data was loaded
+
+                if subjects_from_cache is None: # 'all' was selected in data loading
+                    subjects_to_pass_to_train_script = 'all'
+                    print(f"Using ALL subjects from the data previously loaded from: {data_path_for_training}")
+                else: # A specific list of subjects was loaded
+                    subjects_to_pass_to_train_script = subjects_from_cache
+                    print(f"Using subjects {subjects_to_pass_to_train_script} from the data previously loaded from: {data_path_for_training}")
+            else:
+                # No data loaded via CLI, or loading was incomplete.
+                # Training script will load its own data. Prompt for subject configuration.
+                print(f"Warning: No data pre-loaded via CLI menu or loading was incomplete.")
+                print(f"Training script will attempt to load data from: {data_path_for_training}")
+                
+                prompt_text = (
+                    f"Enter subject IDs for training (e.g., 1,2,3 or 'all' for all subjects from '{data_path_for_training}',\\n"
+                    f"or press Enter for default: 1-10 subjects): "
+                )
+                subjects_str_train = input(prompt_text)
+
+                if not subjects_str_train: # User pressed Enter
+                    subjects_to_pass_to_train_script = None # Triggers default 1-10 in train_model.py
+                    print("Using default subjects (1-10) for training.")
+                elif subjects_str_train.lower() == 'all':
+                    subjects_to_pass_to_train_script = 'all'
+                    print(f"Attempting to use ALL available subjects from {data_path_for_training}.")
+                else:
+                    try:
+                        subjects_to_pass_to_train_script = [int(s.strip()) for s in subjects_str_train.split(',')]
+                        print(f"Using specified subjects: {subjects_to_pass_to_train_script} from {data_path_for_training}.")
+                    except ValueError:
+                        print("Invalid subject IDs. Training will use default subjects (1-10).")
+                        subjects_to_pass_to_train_script = None
+
+            if choice == '1': # Custom parameters
+                print("\n--- Configure Training Parameters ---")
+                num_epochs = get_int_input("Number of epochs per fold", default_num_epochs)
+                k_folds = get_int_input("Number of K-folds", default_k_folds)
+                lr = get_float_input("Learning rate", default_lr)
+                early_stop = get_int_input("Early stopping patience", default_early_stop_patience)
+                batch_size = get_int_input("Batch size", default_batch_size)
+                test_split = get_float_input("Test set split ratio", default_test_split)
+                print("-----------------------------------")
+            else: # Default parameters
+                num_epochs = default_num_epochs
+                k_folds = default_k_folds
+                lr = default_lr
+                early_stop = default_early_stop_patience
+                batch_size = default_batch_size
+                test_split = default_test_split
+                print("Using default training parameters.")
+
+            print("\nStarting training...")
+            try:
+                train_main_script(
+                    subjects_to_use=subjects_to_pass_to_train_script, # Use the determined subjects
+                    num_epochs_per_fold=num_epochs,
+                    num_k_folds=k_folds,
+                    learning_rate=lr,
+                    early_stopping_patience=early_stop,
+                    batch_size=batch_size,
+                    test_split_ratio=test_split,
+                    data_base_path=data_path_for_training # Pass the data path used in CLI data loading
+                )
+                print("Training process completed. Check console output and generated files (plots, models).")
             except Exception as e:
                 print(f"An error occurred during training: {e}")
                 import traceback
                 traceback.print_exc()
 
-        elif choice == '2':
+        elif choice == '3':
             print("Displaying last training results...")
             print("Result display placeholder. Check console output from training and files in 'plots' and root project directory for models.")
-        elif choice == '3':
+        elif choice == '4':
             break
         else:
             print("Invalid choice. Please try again.")

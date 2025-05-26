@@ -13,10 +13,10 @@ import matplotlib.pyplot as plt
 
 # Training parameters
 BATCH_SIZE = 32
-NUM_EPOCHS = 50
+# NUM_EPOCHS = 50 # Will be passed as a parameter
 LEARNING_RATE = 0.001
 EARLY_STOPPING_PATIENCE = 5
-K_FOLDS = 5
+# K_FOLDS = 5 # Will be passed as a parameter
 TEST_SPLIT = 0.2  # Hold out test set before K-fold
 
 def train_epoch(model, dataloader, criterion, optimizer, device):
@@ -65,7 +65,7 @@ def validate(model, dataloader, criterion, device):
     val_acc = correct / total
     return val_loss, val_acc
 
-def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
+def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epochs, learning_rate, early_stopping_patience, batch_size): # Added num_epochs, learning_rate, early_stopping_patience, batch_size
     """
     Train model for a single fold
     
@@ -74,6 +74,10 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
         X_val, y_val: Validation data and labels
         fold_num: Current fold number
         device: Training device
+        num_epochs: Number of epochs to train for
+        learning_rate: Learning rate for the optimizer
+        early_stopping_patience: Patience for early stopping
+        batch_size: Batch size for DataLoader
         
     Returns:
         best_val_acc: Best validation accuracy achieved
@@ -81,9 +85,9 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
     """
     # Create dataloaders
     train_loader = DataLoader(list(zip(X_train, y_train)), 
-                            batch_size=BATCH_SIZE, shuffle=True)
+                            batch_size=batch_size, shuffle=True) # Use batch_size parameter
     val_loader = DataLoader(list(zip(X_val, y_val)), 
-                          batch_size=BATCH_SIZE)
+                          batch_size=batch_size) # Use batch_size parameter
     
     # Create model
     n_channels = X_train.shape[1]
@@ -99,7 +103,7 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
     
     # Loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate) # Use learning_rate parameter
     
     # Initialize tracking
     train_losses = []
@@ -113,7 +117,7 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
     patience_counter = 0
     
     print(f"\nTraining Fold {fold_num}...")
-    for epoch in range(NUM_EPOCHS):
+    for epoch in range(num_epochs): # Use num_epochs parameter
         # Training phase
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
         
@@ -128,7 +132,7 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
         
         # Print progress every 10 epochs
         if (epoch + 1) % 10 == 0:
-            print(f"  Epoch {epoch+1}/{NUM_EPOCHS}: Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+            print(f"  Epoch {epoch+1}/{num_epochs}: Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}") # Use num_epochs parameter
         
         # Early stopping based on validation accuracy
         if val_acc > best_val_acc:
@@ -139,7 +143,7 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
             torch.save(model.state_dict(), f'eeg_inception_fold_{fold_num}.pth')
         else:
             patience_counter += 1
-            if patience_counter >= EARLY_STOPPING_PATIENCE:
+            if patience_counter >= early_stopping_patience: # Use early_stopping_patience parameter
                 print(f"  Early stopping triggered at epoch {epoch+1}")
                 break
     
@@ -153,33 +157,57 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
     print(f"  Fold {fold_num} completed - Best Val Acc: {best_val_acc:.4f}")
     return best_val_acc, training_history
 
-def main():
+def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_rate=0.001, early_stopping_patience=5, batch_size=32, test_split_ratio=0.2, data_base_path="eeg_data", runs_to_include=None):
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    
+
+    if subjects_to_use is None:
+        subjects_list = list(range(1, 11)) # Default to first 10 subjects
+        print("No subjects specified, defaulting to subjects 1-10.")
+    elif isinstance(subjects_to_use, str) and subjects_to_use.lower() == 'all':
+        subjects_list = None # BCIDataLoader handles None as all subjects
+        print("Using all available subjects.")
+    elif isinstance(subjects_to_use, list):
+        subjects_list = subjects_to_use
+        print(f"Using specified subjects: {subjects_list}")
+    else:
+        raise ValueError("subjects_to_use must be a list of integers, 'all', or None.")
+
+    if runs_to_include is None:
+        runs_to_include = [4, 8, 12] # Default motor imagery runs
+
     # Load data
     data_loader = BCIDataLoader(
-        data_path="eeg_data",
-        subjects=list(range(1, 11)),  # First 10 subjects
-        runs=[4, 8, 12]  # Motor imagery runs
+        data_path=data_base_path, # Use data_base_path parameter
+        subjects=subjects_list,
+        runs=runs_to_include  # Use runs_to_include parameter
     )
     
-    windows, labels, _ = data_loader.load_all_subjects()
+    windows, labels, subject_ids = data_loader.load_all_subjects()
+
+    if windows.size == 0:
+        print("No data loaded. Exiting training.")
+        return
     
+    print(f"Data loaded. Shapes: Windows-{windows.shape}, Labels-{labels.shape}, Subject IDs-{subject_ids.shape}")
+    print(f"Unique labels: {np.unique(labels)}, Counts: {np.bincount(labels)}")
+    print(f"Number of unique subjects in loaded data: {len(np.unique(subject_ids))}")
+
+
     # Hold out test set
     X_train_val, X_test, y_train_val, y_test = train_test_split(
-        windows, labels, test_size=TEST_SPLIT, random_state=42, stratify=labels
+        windows, labels, test_size=test_split_ratio, random_state=42, stratify=labels # Use test_split_ratio
     )
     
     # K-fold cross-validation
-    kfold = KFold(n_splits=K_FOLDS, shuffle=True, random_state=42)
+    kfold = KFold(n_splits=num_k_folds, shuffle=True, random_state=42) # Use num_k_folds parameter
     
     # Track results across folds
     fold_results = []
     all_training_histories = []
     
-    print(f"\nStarting {K_FOLDS}-fold cross-validation...")
+    print(f"\nStarting {num_k_folds}-fold cross-validation...") # Use num_k_folds parameter
     
     for fold, (train_idx, val_idx) in enumerate(kfold.split(X_train_val), 1):
         # Split data for this fold
@@ -190,7 +218,11 @@ def main():
         
         # Train model for this fold
         best_val_acc, training_history = train_single_fold(
-            X_train_fold, y_train_fold, X_val_fold, y_val_fold, fold, device
+            X_train_fold, y_train_fold, X_val_fold, y_val_fold, fold, device,
+            num_epochs=num_epochs_per_fold, # Pass num_epochs_per_fold
+            learning_rate=learning_rate, # Pass learning_rate
+            early_stopping_patience=early_stopping_patience, # Pass early_stopping_patience
+            batch_size=batch_size # Pass batch_size
         )
         
         fold_results.append(best_val_acc)
@@ -212,7 +244,11 @@ def main():
     # Train final model on all training data and evaluate on test set
     print(f"\nTraining final model on all training data...")
     final_best_acc, final_history = train_single_fold(
-        X_train_val, y_train_val, X_test, y_test, "final", device
+        X_train_val, y_train_val, X_test, y_test, "final", device,
+        num_epochs=num_epochs_per_fold, # Pass num_epochs_per_fold for final training as well
+        learning_rate=learning_rate,
+        early_stopping_patience=early_stopping_patience, # Can be different for final model if needed
+        batch_size=batch_size
     )
     
     print(f"\nFinal test accuracy: {final_best_acc:.4f}")
@@ -226,9 +262,9 @@ def main():
     
     # Subplot 1: CV accuracy distribution
     plt.subplot(2, 3, 1)
-    plt.bar(range(1, K_FOLDS + 1), fold_results, alpha=0.7, color='skyblue', edgecolor='navy')
+    plt.bar(range(1, num_k_folds + 1), fold_results, alpha=0.7, color='skyblue', edgecolor='navy') # Use num_k_folds
     plt.axhline(y=cv_mean, color='red', linestyle='--', label=f'Mean: {cv_mean:.3f}')
-    plt.fill_between(range(0, K_FOLDS + 2), cv_mean - cv_std, cv_mean + cv_std, 
+    plt.fill_between(range(0, num_k_folds + 2), cv_mean - cv_std, cv_mean + cv_std, # Use num_k_folds
                      alpha=0.2, color='red', label=f'±1 STD: {cv_std:.3f}')
     plt.xlabel('Fold')
     plt.ylabel('Validation Accuracy')
@@ -302,7 +338,7 @@ def main():
     summary_text = f"""
     K-Fold Cross-Validation Summary
     
-    Number of Folds: {K_FOLDS}
+    Number of Folds: {num_k_folds} 
     Mean Accuracy: {cv_mean:.4f}
     Standard Deviation: {cv_std:.4f}
     Min Accuracy: {min(fold_results):.4f}
@@ -311,10 +347,10 @@ def main():
     Final Test Accuracy: {final_best_acc:.4f}
     
     Training Parameters:
-    • Batch Size: {BATCH_SIZE}
-    • Max Epochs: {NUM_EPOCHS}
-    • Learning Rate: {LEARNING_RATE}
-    • Early Stopping: {EARLY_STOPPING_PATIENCE} epochs
+    • Batch Size: {batch_size}
+    • Max Epochs: {num_epochs_per_fold}
+    • Learning Rate: {learning_rate}
+    • Early Stopping: {early_stopping_patience} epochs
     """
     plt.text(0.1, 0.9, summary_text, transform=plt.gca().transAxes, 
              fontsize=10, verticalalignment='top', fontfamily='monospace')
@@ -327,4 +363,7 @@ def main():
     print("\nTraining complete!")
 
 if __name__ == "__main__":
-    main()
+    # Example of how to run with default parameters:
+    # main() 
+    # Example of how to run with custom parameters:
+    main(subjects_to_use=list(range(1, 16)), num_epochs_per_fold=3, num_k_folds=3, learning_rate=0.0005, early_stopping_patience=3, batch_size=16, test_split_ratio=0.15, data_base_path="eeg_data", runs_to_include=[3,7,11]) # Example with more subjects and fewer epochs/folds
