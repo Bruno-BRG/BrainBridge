@@ -9,6 +9,8 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from sklearn.model_selection import train_test_split, KFold
 import os
+import matplotlib
+matplotlib.use('Agg') # Add this line
 import matplotlib.pyplot as plt
 
 # Training parameters
