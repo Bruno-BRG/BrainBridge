@@ -147,8 +147,8 @@ from src.model.eeg_inception_erp import EEGInceptionERP
 
 model = EEGInceptionERP(
     n_chans=16,
-    n_outputs=2,
-    n_times=500,
+    n_outputs=2,  # Updated parameter name
+    n_times=500,  # Updated parameter name
     sfreq=125
 )
 ```
@@ -179,8 +179,9 @@ python train_model.py
 ### Model Parameters
 - `n_filters`: Number of initial filters (default: 8)
 - `drop_prob`: Dropout probability (default: 0.5)
-- `scales_samples_s`: Temporal scales in seconds (default: (0.5, 0.25, 0.125))
-- `pooling_sizes`: Pooling sizes (default: (4, 2, 2, 2))
+- `n_outputs`: Number of output classes (replaces deprecated n_classes)
+- `n_times`: Number of time samples (replaces deprecated input_window_samples)
+- `sfreq`: Sampling frequency in Hz
 
 ### Data Processing
 - `window_length`: Window duration in seconds (default: 4.0)

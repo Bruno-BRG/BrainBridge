@@ -387,8 +387,9 @@ class BCIDataset(Dataset):
         """
         window = self.windows[idx]
         label = self.labels[idx]
-          # Apply data augmentation if enabled
-        if self.augment and hasattr(self, 'training') and self.training:
+        
+        # Apply data augmentation if enabled
+        if self.augment:
             window = self._augment_window(window)
         
         # Apply transform if provided

@@ -13,3 +13,4 @@ applyTo: '**'
 - Handle exceptions properly
 - Maintain updated dependencies
 - MOST IMPORTANT: Each file should only have one class in it just like in Java.
+- At the end of every message you should put a summary of the changes you made in the code.

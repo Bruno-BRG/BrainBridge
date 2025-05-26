@@ -63,25 +63,24 @@ class EEGModel(torch.nn.Module):
         if BraindecodeEEGInceptionERP is not None:
             try:
                 self.model = BraindecodeEEGInceptionERP(
-                    in_chans=n_chans,
-                    n_classes=n_outputs,
-                    input_window_samples=n_times,
-                    final_conv_length='auto',
-                    F1=8*n_filters,
-                    drop_prob=drop_prob,
+                    n_chans=n_chans,
+                    n_outputs=n_outputs,  # Use n_outputs instead of n_classes
+                    n_times=n_times,      # Use n_times instead of input_window_samples
                     sfreq=sfreq,
+                    drop_prob=drop_prob,
+                    n_filters=n_filters,
                 )
             except Exception:
                 # If parameters are incompatible, try simplified version
                 self.model = BraindecodeEEGInceptionERP(
-                    in_chans=n_chans,
-                    n_classes=n_outputs,
-                    input_window_samples=n_times,
+                    n_chans=n_chans,
+                    n_outputs=n_outputs,
+                    n_times=n_times,
                 )
         else:
             # Fallback simple CNN if braindecode models are not available
             self.model = self._create_simple_cnn(n_chans, n_outputs, n_times, drop_prob)
-    
+
     def _create_simple_cnn(self, n_chans, n_outputs, n_times, drop_prob):
         """Create a simple CNN as fallback"""
         return nn.Sequential(

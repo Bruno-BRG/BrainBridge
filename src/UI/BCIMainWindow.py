@@ -25,7 +25,7 @@ import seaborn as sns
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTabWidget,
-    QGroupBox, QProgressBar, QComboBox, QSpinBox, QCheckBox,
+    QGroupBox, QProgressBar, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
     QMessageBox,
     QSlider, QScrollArea
 )
@@ -36,6 +36,7 @@ from PyQt5.QtGui import QFont
 from .PlotCanvas import PlotCanvas  # Change from UI.PlotCanvas to .PlotCanvas
 from .data_tab.DataLoadThread import DataLoadThread  # Change from UI.data_tab.DataLoadThread to .data_tab.DataLoadThread
 from src.data.data_loader import BCIDataLoader, create_data_loaders  # This remains the same as it's from src package
+from .training_tab.TrainingManager import TrainingManager  # Now just handles UI
 
 # Set the style
 plt.style.use('seaborn-v0_8')
@@ -138,13 +139,13 @@ class BCIMainWindow(QMainWindow):
         self.current_sample_label = QLabel("Current Sample: N/A")
         self.sample_label_info = QLabel("Label: N/A")
         self.sample_subject_info = QLabel("Subject: N/A")
-        self.sample_run_info = QLabel("Run: N/A")
+        # self.sample_run_info = QLabel("Run: N/A") # Removed
         
         info_layout.addWidget(self.total_samples_label)
         info_layout.addWidget(self.current_sample_label)
         info_layout.addWidget(self.sample_label_info)
         info_layout.addWidget(self.sample_subject_info)
-        info_layout.addWidget(self.sample_run_info)
+        # info_layout.addWidget(self.sample_run_info) # Removed
         
         info_group.setLayout(info_layout)
         left_layout.addWidget(info_group)
@@ -195,7 +196,7 @@ class BCIMainWindow(QMainWindow):
         self.show_channels_spinbox = QSpinBox()
         self.show_channels_spinbox.setMinimum(1)
         self.show_channels_spinbox.setMaximum(16)
-        self.show_channels_spinbox.setValue(10)
+        self.show_channels_spinbox.setValue(16) # Changed default to 16
         
         display_layout.addWidget(QLabel("Channels to display:"))
         display_layout.addWidget(self.show_channels_spinbox)
@@ -246,34 +247,132 @@ class BCIMainWindow(QMainWindow):
         self._set_navigation_enabled(False)    
         
     def _create_training_tab(self):
-        """Create training tab with placeholder content"""
+        """Create training tab with comprehensive training controls"""
         layout = QVBoxLayout(self.training_tab)
         
-        # Main container
-        container = QWidget()
-        container_layout = QVBoxLayout()
+        # Initialize training manager
+        self.training_manager = TrainingManager()
         
-        # Title
-        title = QLabel("Training Configuration")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
-        container_layout.addWidget(title)
+        # Top section for configuration
+        config_section = QHBoxLayout()
         
-        # Placeholder content
-        placeholder = QLabel("Training functionality will be implemented here.\n\n"
-                            "This will include:\n"
-                            "• Model architecture selection\n"
-                            "• Training parameter configuration\n"
-                            "• K-fold cross-validation setup\n"
-                            "• Training progress visualization\n"
-                            "• Model saving and checkpointing")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setStyleSheet("QLabel { padding: 20px; background-color: #f0f0f0; border: 1px solid #ccc; border-radius: 5px; }")
-        container_layout.addWidget(placeholder)
+        # Model configuration group
+        model_group = QGroupBox("Model Configuration")
+        model_layout = QVBoxLayout()
         
-        container_layout.addStretch()
-        container.setLayout(container_layout)
-        layout.addWidget(container)
+        # Model type selection
+        model_type_layout = QHBoxLayout()
+        model_type_layout.addWidget(QLabel("Model Type:"))
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItems(["EEGInceptionERP", "EEGNetv4"])
+        model_type_layout.addWidget(self.model_type_combo)
+        model_layout.addLayout(model_type_layout)
+        
+        model_group.setLayout(model_layout)
+        config_section.addWidget(model_group)
+        
+        # Training parameters group
+        train_group = QGroupBox("Training Parameters")
+        train_layout = QVBoxLayout()
+        
+        self.batch_size_spin = self._create_param_spinner("Batch Size:", 32, 1, 256)
+        self.epochs_spin = self._create_param_spinner("Epochs:", 50, 1, 1000)
+        self.learning_rate_spin = self._create_param_spinner("Learning Rate:", 0.001, 0.0001, 0.1, 0.0001)
+        self.k_folds_spin = self._create_param_spinner("K-Folds:", 5, 1, 10)
+        self.patience_spin = self._create_param_spinner("Early Stopping Patience:", 5, 1, 20)
+        
+        for param in [self.batch_size_spin, self.epochs_spin, self.learning_rate_spin, 
+                     self.k_folds_spin, self.patience_spin]:
+            train_layout.addLayout(param)
+        
+        train_group.setLayout(train_layout)
+        config_section.addWidget(train_group)
+        
+        layout.addLayout(config_section)
+        
+        # Middle section for controls and progress
+        control_section = QHBoxLayout()
+        
+        # Training controls
+        control_group = QGroupBox("Training Controls")
+        control_layout = QVBoxLayout()
+        
+        # Progress display
+        self.training_progress = QProgressBar()
+        self.training_progress.setVisible(False)
+        control_layout.addWidget(self.training_progress)
+        
+        # Status label
+        self.training_status = QLabel("Ready")
+        control_layout.addWidget(self.training_status)
+        
+        # Control buttons
+        button_layout = QHBoxLayout()
+        self.start_training_btn = QPushButton("Start Training")
+        self.start_training_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.stop_training_btn = QPushButton("Stop")
+        self.stop_training_btn.setEnabled(False)
+        self.stop_training_btn.setStyleSheet("background-color: #f44336; color: white;")
+        
+        button_layout.addWidget(self.start_training_btn)
+        button_layout.addWidget(self.stop_training_btn)
+        control_layout.addLayout(button_layout)
+        
+        control_group.setLayout(control_layout)
+        control_section.addWidget(control_group)
+        
+        # Current fold info
+        fold_group = QGroupBox("Current Fold")
+        fold_layout = QVBoxLayout()
+        
+        self.current_fold_label = QLabel("Fold: N/A")
+        self.current_epoch_label = QLabel("Epoch: N/A")
+        self.current_loss_label = QLabel("Loss: N/A")
+        self.current_acc_label = QLabel("Accuracy: N/A")
+        
+        for label in [self.current_fold_label, self.current_epoch_label, 
+                     self.current_loss_label, self.current_acc_label]:
+            fold_layout.addWidget(label)
+        
+        fold_group.setLayout(fold_layout)
+        control_section.addWidget(fold_group)
+        
+        layout.addLayout(control_section)
+        
+        # Bottom section for visualization
+        viz_group = QGroupBox("Training Visualization")
+        viz_layout = QVBoxLayout()
+        
+        # Add plot canvas
+        self.training_plot = PlotCanvas(width=8, height=4)
+        viz_layout.addWidget(self.training_plot)
+        
+        viz_group.setLayout(viz_layout)
+        layout.addWidget(viz_group)
+        
+        # Connect signals
+        self.start_training_btn.clicked.connect(self._start_training)
+        self.stop_training_btn.clicked.connect(self._stop_training)
+        
+        # Connect training manager signals
+        self.training_manager.training_started.connect(self._on_training_started)
+        self.training_manager.fold_started.connect(self._on_fold_started)
+        self.training_manager.epoch_completed.connect(self._on_epoch_completed)
+        self.training_manager.fold_completed.connect(self._on_fold_completed)
+        self.training_manager.training_completed.connect(self._on_training_completed)
+        self.training_manager.training_error.connect(self._on_training_error)
+
+    def _create_param_spinner(self, label, default, minimum, maximum, step=1):
+        """Helper to create parameter spinners with labels"""
+        layout = QHBoxLayout()
+        layout.addWidget(QLabel(label))
+        spinner = QDoubleSpinBox() if isinstance(step, float) else QSpinBox()
+        spinner.setValue(default)
+        spinner.setMinimum(minimum)
+        spinner.setMaximum(maximum)
+        spinner.setSingleStep(step)
+        layout.addWidget(spinner)
+        return layout
 
     def _create_testing_tab(self):
         """Create testing tab with placeholder content"""
@@ -400,22 +499,27 @@ class BCIMainWindow(QMainWindow):
     
     def _update_data_info(self):
         """Update data information labels"""
-        if self.loaded_data is None:
-            return
-        
-        total_samples = len(self.filtered_indices)
-        self.total_samples_label.setText(f"Total Samples: {total_samples}")
-        
-        if total_samples > 0:
+        if self.loaded_data and self.filtered_indices:
             actual_idx = self.filtered_indices[self.current_sample_idx]
-            label = self.loaded_data['labels'][actual_idx]
-            subject_id = self.loaded_data['subject_ids'][actual_idx]
+            self.total_samples_label.setText(f"Total Samples: {len(self.filtered_indices)} (filtered)")
+            self.current_sample_label.setText(f"Current Sample: {self.current_sample_idx + 1} / {len(self.filtered_indices)}")
             
-            self.current_sample_label.setText(f"Current Sample: {self.current_sample_idx + 1}/{total_samples}")
-            self.sample_label_info.setText(f"Label: {'Left Hand' if label == 0 else 'Right Hand'}")
-            self.sample_subject_info.setText(f"Subject: {subject_id:03d}")
-            # Note: run info would need to be added to the data structure
-            self.sample_run_info.setText("Run: N/A")
+            label_map = {0: "Left Hand", 1: "Right Hand"} # Example mapping
+            label_val = self.loaded_data['labels'][actual_idx]
+            self.sample_label_info.setText(f"Label: {label_map.get(label_val, f'Raw: {label_val}')}")
+            
+            if 'subject_ids' in self.loaded_data and self.loaded_data['subject_ids'] is not None:
+                self.sample_subject_info.setText(f"Subject: {self.loaded_data['subject_ids'][actual_idx]}")
+            else:
+                self.sample_subject_info.setText("Subject: N/A")
+            
+            # self.sample_run_info.setText(f"Run: {self.loaded_data['run_ids'][actual_idx]}") # Removed, ensure 'run_ids' existed if re-adding
+        else:
+            self.total_samples_label.setText("Total Samples: 0")
+            self.current_sample_label.setText("Current Sample: N/A")
+            self.sample_label_info.setText("Label: N/A")
+            self.sample_subject_info.setText("Subject: N/A")
+            # self.sample_run_info.setText("Run: N/A") # Removed
     
     def _update_plot(self):
         """Update the EEG plot with current sample"""
@@ -492,6 +596,82 @@ class BCIMainWindow(QMainWindow):
         if self.filtered_indices and 0 <= value < len(self.filtered_indices):
             self.current_sample_idx = value
             self._update_plot()
+    
+    def _on_training_started(self):
+        self.statusBar().showMessage("Training started...")
+        
+    def _on_fold_started(self, fold):
+        self.statusBar().showMessage(f"Training fold {fold}...")
+        
+    def _on_epoch_completed(self, epoch, train_loss, train_acc, val_loss, val_acc):
+        self.statusBar().showMessage(f"Epoch {epoch}: train_acc={train_acc:.3f}, val_acc={val_acc:.3f}")
+        
+    def _on_fold_completed(self, fold, val_acc):
+        self.statusBar().showMessage(f"Fold {fold} completed: val_acc={val_acc:.3f}")
+        
+    def _on_training_completed(self, results):
+        self.statusBar().showMessage("Training completed!")
+        
+    def _on_training_error(self, error_msg):
+        QMessageBox.critical(self, "Training Error", error_msg)
+
+    def _start_training(self):
+        """Start the training process using parameters from the UI"""
+        if not self.loaded_data:
+            QMessageBox.warning(self, "Data Missing", "Please load data before starting training.")
+            return
+
+        model_type = self.model_type_combo.currentText()
+        batch_size = self.batch_size_spin.findChild(QSpinBox).value()
+        num_epochs = self.epochs_spin.findChild(QSpinBox).value()
+        learning_rate = self.learning_rate_spin.findChild(QDoubleSpinBox).value()
+        k_folds = self.k_folds_spin.findChild(QSpinBox).value()
+        patience = self.patience_spin.findChild(QSpinBox).value()
+
+        # Prepare model configuration
+        model_config = {
+            'model_type': model_type,
+            # 'n_filters': n_filters, # Removed
+            # 'dropout': dropout, # Removed
+            # Assuming EEGInceptionERP specific defaults or that ModelTrainer handles missing keys
+            'n_channels': self.loaded_data['windows'].shape[1] if self.loaded_data else 16, # Default if no data
+            'n_classes': len(set(self.loaded_data['labels'])) if self.loaded_data else 2, # Default if no data
+            'input_window_samples': self.loaded_data['windows'].shape[2] if self.loaded_data else 500 # Default
+        }
+
+        # Prepare training configuration
+        training_config = {
+            'batch_size': batch_size,
+            'num_epochs': num_epochs,
+            'learning_rate': learning_rate,
+            'k_folds': k_folds,
+            'patience': patience,
+            'model_save_path': project_root # Base path, ModelTrainer will append specifics
+        }
+        
+        self.training_manager.configure(model_config, training_config)
+        
+        # Ensure data is prepared in the TrainingManager
+        # This uses the data loaded in the Data Loading Tab
+        self.training_manager.prepare_data(
+            self.loaded_data['windows'], 
+            self.loaded_data['labels'], 
+            self.loaded_data.get('subject_ids') # Pass subject_ids if available
+        )
+
+        self.training_manager.start_training()
+        
+        # Update UI
+        self.start_training_btn.setEnabled(False)
+        self.stop_training_btn.setEnabled(True)
+        self.training_progress.setVisible(True)
+
+    def _stop_training(self):
+        """Stop the training process"""
+        self.training_manager.stop_training()
+        self.stop_training_btn.setEnabled(False)
+        self.start_training_btn.setEnabled(True)
+        self.training_status.setText("Training stopped")
 
 def main():
     app = QApplication([]) # Use sys.argv in a standalone script

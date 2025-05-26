@@ -88,11 +88,11 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device):
     # Create model
     n_channels = X_train.shape[1]
     n_times = X_train.shape[2]
-    n_classes = len(np.unique(y_train))
+    n_outputs = len(np.unique(y_train))  # Use n_outputs instead of n_classes
 
     model = EEGModel(
         n_chans=n_channels,
-        n_outputs=n_classes,
+        n_outputs=n_outputs,  # Updated parameter name
         n_times=n_times,
         sfreq=125
     ).to(device)
