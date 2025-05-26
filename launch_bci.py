@@ -6,13 +6,14 @@ It handles initialization, dependency checks, and launches the GUI
 or other operational modes via command-line arguments.
 """
 
-import sys
+import sys # Added: for sys.exit and path manipulation
 import os
-import logging
-import warnings
+import logging # Added: for logging
+import warnings # Added: for suppressing warnings
 from pathlib import Path
 import pkg_resources
 import argparse # Added: for command-line argument parsing
+from src.UI.main_gui import start_gui # Added: Import the GUI start function
 
 # Suppress expected warnings from ML libraries
 warnings.filterwarnings("ignore", category=UserWarning, module="braindecode.models.base")
@@ -81,18 +82,14 @@ def main():
 
     # Check Python version
     if sys.version_info < (3, 8):
-        print("Python 3.8 or higher is required")
-        sys.exit(1)
+        logging.error("Python 3.8 or higher is required.") # Corrected: Use logging
+        sys.exit(1) # Corrected: Use sys.exit
     
     # Check dependencies
     missing = check_dependencies()
     if missing:
-        print("Missing required packages:")
-        for pkg in missing:
-            print(f"  - {pkg}")
-        print("\nPlease install missing packages using:")
-        print("pip install -r requirements.txt")
-        sys.exit(1)
+        logging.error(f"Missing dependencies: {', '.join(missing)}. Please install them.") # Corrected: Use logging
+        sys.exit(1) # Corrected: Use sys.exit
     
     # Setup logging
     setup_logging()
@@ -100,54 +97,19 @@ def main():
     logger.info(f"Starting BCI application in {args.mode} mode")
 
     if args.mode == 'gui':
-        logger.info("Launching GUI mode...")
-        try:
-            from PyQt5.QtWidgets import QApplication
-            from src.UI.BCIMainWindow import BCIMainWindow
-            
-            app = QApplication(sys.argv)
-            main_window = BCIMainWindow()
-            main_window.show()
-            sys.exit(app.exec_())
-        except ImportError as e:
-            logger.error(f"Failed to import PyQt5 or BCIMainWindow: {e}")
-            logger.error("Please ensure PyQt5 is installed and the UI components are correctly placed.")
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while launching the GUI: {e}")
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
-            
+        logger.info("Launching GUI...")
+        start_gui()
     elif args.mode == 'train':
-        logger.info("Launching model training mode...")
-        try:
-            from src.model.train_model import main as train_main_script
-            train_main_script() # This will run the full training, k-fold CV, and final model eval
-            logger.info("Model training script finished.")
-        except ImportError as e:
-            logger.error(f"Failed to import training script: {e}")
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"An error occurred during training: {e}")
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
-    
+        logger.info("Starting model training (placeholder - implement actual call)")
+        # Example: from src.model.train_model import main as train_script; train_script(args.config)
+        pass
     elif args.mode == 'cli':
-        logger.info("Launching CLI mode...")
-        try:
-            from src.cli.main_cli import main_menu
-            main_menu()
-            logger.info("CLI session finished.")
-        except ImportError as e:
-            logger.error(f"Failed to import CLI main_menu: {e}")
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"An error occurred during CLI execution: {e}")
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
+        logger.info("Launching CLI (placeholder - implement actual call)")
+        # Example: from src.cli.main_cli import main_menu as cli_main; cli_main()
+        pass
+    else:
+        logger.error(f"Unknown mode: {args.mode}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

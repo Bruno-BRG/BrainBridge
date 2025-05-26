@@ -89,23 +89,23 @@ class ModelTrainer:
             n_chans = train_windows.shape[1]
             n_times = train_windows.shape[2]
             model = EEGModel(
-                n_chans=n_chans,
-                n_outputs=2,  # Binary classification
-                n_times=n_times,
-                sfreq=125.0,  # Standard EEG sampling rate
-                drop_prob=self.config.get('dropout', 0.5),
-                n_filters=self.config.get('n_filters', 8)
+                n_chans=self.config.get('input_channels', n_chans), # Use input_channels from config
+                n_outputs=self.config.get('num_classes', 2),  # Use num_classes from config
+                n_times=self.config.get('input_window_samples', n_times), # Use input_window_samples
+                sfreq=self.config.get('sfreq', 125.0),  # Use sfreq from config
+                drop_prob=self.config.get('additional_model_params', {}).get('drop_prob', 0.5), # More robust access
+                n_filters=self.config.get('additional_model_params', {}).get('n_filters', 8) # More robust access
             )
             
             # Set up training components
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            device = torch.device(self.config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
             model.to(device)
-            criterion = nn.CrossEntropyLoss()
+            criterion = nn.CrossEntropyLoss() # Or get from config if made configurable
             optimizer = optim.Adam(model.parameters(), lr=self.config.get('learning_rate', 0.001))
             
             # Training loop
             num_epochs = self.config.get('num_epochs', 50)
-            patience = self.config.get('patience', 5)
+            patience = self.config.get('early_stopping_patience', 5) # Use early_stopping_patience
             best_val_acc = 0.0
             patience_counter = 0
             
