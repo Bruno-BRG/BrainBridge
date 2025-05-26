@@ -1,17 +1,17 @@
 """
 Full training script for EEGInceptionERP model using real EEG data with K-fold cross-validation
 """
+import os
 import torch
+import numpy as np
+import matplotlib # Import matplotlib like this
+matplotlib.use('Agg') # Then set backend. Must be before importing pyplot.
+import matplotlib.pyplot as plt # Then import pyplot
 from torch.utils.data import DataLoader
 from src.data.data_loader import BCIDataLoader
 from src.model.eeg_inception_erp import EEGModel
 from torch.utils.tensorboard import SummaryWriter
-import numpy as np
 from sklearn.model_selection import train_test_split, KFold
-import os
-import matplotlib
-matplotlib.use('Agg') # Add this line
-import matplotlib.pyplot as plt
 
 # Training parameters
 BATCH_SIZE = 32
@@ -256,11 +256,10 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
     print(f"\nFinal test accuracy: {final_best_acc:.4f}")
     
     # Generate comprehensive plots
-    print("\nGenerating training plots...")
+    print("\\nGenerating training plots...")
     os.makedirs('plots', exist_ok=True)
     
-    # Plot CV results summary
-    plt.figure(figsize=(15, 10))
+    fig = plt.figure(figsize=(18, 12)) # Increased figure size for better layout with legend
     
     # Subplot 1: CV accuracy distribution
     plt.subplot(2, 3, 1)
@@ -324,15 +323,15 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
     plt.grid(True, alpha=0.3)
     
     # Subplot 5: Individual fold learning curves
-    plt.subplot(2, 3, 5)
+    ax5 = plt.subplot(2, 3, 5)
     for i, hist in enumerate(all_training_histories):
-        epochs = range(1, len(hist['val_accuracies']) + 1)
-        plt.plot(epochs, hist['val_accuracies'], alpha=0.6, label=f'Fold {i+1}')
-    plt.xlabel('Epoch')
-    plt.ylabel('Validation Accuracy')
-    plt.title('Individual Fold Learning Curves')
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, alpha=0.3)
+        fold_epochs = range(1, len(hist['val_accuracies']) + 1)
+        ax5.plot(fold_epochs, hist['val_accuracies'], label=f'Fold {i+1} Val Acc') # Added plotting logic
+    ax5.set_xlabel('Epoch')
+    ax5.set_ylabel('Validation Accuracy')
+    ax5.set_title('Individual Fold Learning Curves')
+    ax5.legend(fontsize='small') # Simpler legend, adjust if needed
+    ax5.grid(True, alpha=0.3)
     
     # Subplot 6: Summary statistics
     plt.subplot(2, 3, 6)
@@ -357,14 +356,17 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
     plt.text(0.1, 0.9, summary_text, transform=plt.gca().transAxes, 
              fontsize=10, verticalalignment='top', fontfamily='monospace')
     
-    plt.tight_layout()
-    plt.savefig('plots/kfold_training_results.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    plt.tight_layout(rect=[0, 0, 0.95, 1]) # Adjust rect to ensure all titles/labels fit
     
-    print("K-fold training plots saved to 'plots/' directory")
-    print("\nTraining complete!")
+    plot_filename = os.path.join('plots', 'kfold_training_results.png')
+    plt.savefig(plot_filename)
+    print(f"Training plots saved to {plot_filename}")
+    # plt.show() # This was causing the crash with 'Agg' backend.
+    plt.close(fig) # Explicitly close the figure to free resources.
 
-if __name__ == "__main__":
+    return {"cv_mean_accuracy": cv_mean, "cv_std_accuracy": cv_std, "final_test_accuracy": final_best_acc, "plot_path": plot_filename}
+
+if __name__ == '__main__':
     # Example of how to run with default parameters:
     # main() 
     # Example of how to run with custom parameters:
