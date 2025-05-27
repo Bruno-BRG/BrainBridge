@@ -1,6 +1,7 @@
 import sys
 import os
 import numpy as np
+import time
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
     QPushButton, QTabWidget, QLabel, QFileDialog,
@@ -730,14 +731,14 @@ class MainWindow(QMainWindow):
         
         recording_group.setLayout(recording_layout)
         layout.addWidget(recording_group)
-        
-        # Initialize PyLSL variables
+          # Initialize PyLSL variables
         self.pylsl_inlet = None
         self.pylsl_buffer = None
         self.pylsl_timer = QTimer()
         self.pylsl_timer.timeout.connect(self.update_pylsl_plot)
         self.pylsl_recording_data = []
         self.pylsl_is_recording = False
+        self.current_sample_rate = 125  # Default sample rate
         
         # Connect signals
         self.pylsl_start_btn.clicked.connect(self.start_pylsl_stream)
@@ -791,21 +792,28 @@ class MainWindow(QMainWindow):
                                   "No EEG streams found. Make sure your device is streaming.")
                 return
             
-            # Connect to the first EEG stream
-            self.pylsl_inlet = StreamInlet(eeg_streams[0], max_buflen=1)
+            # Connect to the first EEG stream with larger buffer
+            self.pylsl_inlet = StreamInlet(eeg_streams[0], max_buflen=10)
             info = self.pylsl_inlet.info()
             
             # Get stream info
             n_channels = info.channel_count()
             sample_rate = int(info.nominal_srate())
             
+            # Store sample rate for later use
+            self.current_sample_rate = sample_rate if sample_rate > 0 else 125
+            
             # Initialize buffer (store last 5 seconds of data)
-            buffer_size = sample_rate * 5
+            buffer_size = self.current_sample_rate * 5
             self.pylsl_buffer = deque(maxlen=buffer_size)
+            self.pylsl_time_buffer = deque(maxlen=buffer_size)  # Separate time buffer
+            
+            print(f"DEBUG: Stream info - Channels: {n_channels}, Sample rate: {self.current_sample_rate}")
+            print(f"DEBUG: Buffer initialized with size: {buffer_size}")
             
             # Update UI
             self.pylsl_channel_display.setText(f"Channels: {n_channels}")
-            self.pylsl_sample_rate.setText(f"Sample Rate: {sample_rate} Hz")
+            self.pylsl_sample_rate.setText(f"Sample Rate: {self.current_sample_rate} Hz")
             self.pylsl_buffer_size.setText(f"Buffer: {buffer_size} samples")
             self.pylsl_status_label.setText("Status: Connected")
             self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ccffcc;")
@@ -815,13 +823,14 @@ class MainWindow(QMainWindow):
             self.pylsl_stop_btn.setEnabled(True)
             self.pylsl_record_btn.setEnabled(True)
             
-            # Start updating plot
-            self.pylsl_timer.start(50)  # Update every 50ms (20 Hz)
+            # Start updating plot with faster refresh
+            print("DEBUG: Starting timer for plot updates")
+            self.pylsl_timer.start(40)  # Update every 40ms (25 Hz)
             
             QMessageBox.information(self, "Stream Started", 
                                   f"Successfully connected to EEG stream:\n"
                                   f"Channels: {n_channels}\n"
-                                  f"Sample Rate: {sample_rate} Hz")
+                                  f"Sample Rate: {self.current_sample_rate} Hz")
             
         except Exception as e:
             QMessageBox.critical(self, "Stream Error", f"Failed to start stream: {str(e)}")
@@ -854,62 +863,110 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Stop Error", f"Error stopping stream: {str(e)}")
-    
+
     def update_pylsl_plot(self):
-        """Update real-time plot with new data"""
-        if not self.pylsl_inlet or not self.pylsl_buffer:
+        """Update real-time plot with simple static visualization"""
+        if not self.pylsl_inlet:
+            print("DEBUG: No inlet available")
             return
-        
+            
+        if self.pylsl_buffer is None:
+            print("DEBUG: Buffer is None")
+            return
+            
         try:
             # Pull new samples
             samples, timestamps = self.pylsl_inlet.pull_chunk(timeout=0.0, max_samples=32)
             
             if samples:
-                # Add to buffer
-                self.pylsl_buffer.extend(samples)
+                print(f"DEBUG: Received {len(samples)} samples")
                 
+                # Add to buffer (simple samples only, no timestamps)
+                for sample in samples:
+                    self.pylsl_buffer.append(sample)
+
                 # Add to recording if active
-                if self.pylsl_is_recording:
+                if self.pylsl_is_recording and timestamps:
                     self.pylsl_recording_data.extend([(sample, timestamp) for sample, timestamp in zip(samples, timestamps)])
-                
-                # Update plot with recent data
-                if len(self.pylsl_buffer) > 0:
-                    # Get last 2 seconds of data for plotting
-                    plot_samples = min(500, len(self.pylsl_buffer))
-                    recent_data = list(self.pylsl_buffer)[-plot_samples:]
-                    
-                    if recent_data:
-                        data_array = np.array(recent_data)
-                        
-                        # Clear and plot
-                        self.pylsl_plot_canvas.axes.clear()
-                        
-                        # Plot each channel
-                        n_channels = data_array.shape[1] if len(data_array.shape) > 1 else 1
-                        
-                        if len(data_array.shape) > 1:
-                            # Multiple channels
-                            for ch in range(min(n_channels, 16)):  # Limit to 16 channels for visibility
-                                channel_data = data_array[:, ch]
-                                # Offset each channel for better visualization
-                                offset = ch * 100
-                                self.pylsl_plot_canvas.axes.plot(channel_data + offset, 
-                                                                label=f'Ch {ch+1}', alpha=0.7)
-                        else:
-                            # Single channel
-                            self.pylsl_plot_canvas.axes.plot(data_array, label='EEG')
-                        
-                        self.pylsl_plot_canvas.axes.set_title("Real-time EEG Data")
-                        self.pylsl_plot_canvas.axes.set_xlabel("Samples")
-                        self.pylsl_plot_canvas.axes.set_ylabel("Amplitude (µV)")
-                        
-                        if n_channels <= 8:  # Only show legend for small number of channels
-                            self.pylsl_plot_canvas.axes.legend()
-                        
-                        self.pylsl_plot_canvas.draw()
+                  # Update simple plot
+                self._update_simple_plot()
+            else:
+                print("DEBUG: No new samples received")
         
         except Exception as e:
-            print(f"Plot update error: {e}")
+            print(f"DEBUG: Plot update error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _update_simple_plot(self):
+        """Create simple static plot visualization"""
+        if len(self.pylsl_buffer) == 0:
+            print("DEBUG: Buffer is empty")
+            return
+        
+        try:
+            print(f"DEBUG: Buffer has {len(self.pylsl_buffer)} samples")
+            
+            # Convert buffer to numpy array
+            if len(self.pylsl_buffer) > 0:
+                data_array = np.array(list(self.pylsl_buffer))
+                print(f"DEBUG: Data array shape: {data_array.shape}")
+                
+                # Clear and setup plot
+                self.pylsl_plot_canvas.axes.clear()
+                
+                # Determine number of channels
+                n_channels = data_array.shape[1] if len(data_array.shape) > 1 else 1
+                print(f"DEBUG: Number of channels: {n_channels}")
+                
+                # Get the last portion of data for display (e.g., last 500 samples)
+                display_samples = min(500, len(data_array))
+                data_to_plot = data_array[-display_samples:]
+                
+                # Create time axis
+                time_axis = np.arange(len(data_to_plot))
+                
+                if len(data_to_plot.shape) > 1:
+                    # Multiple channels - show first 8 for visibility
+                    channels_to_show = min(n_channels, 8)
+                    for ch in range(channels_to_show):
+                        channel_data = data_to_plot[:, ch]
+                        # Apply offset for channel separation
+                        offset = ch * 100  # Offset for better separation
+                        self.pylsl_plot_canvas.axes.plot(time_axis, channel_data + offset, 
+                                                        label=f'Ch {ch+1}', linewidth=1)
+                else:
+                    # Single channel
+                    self.pylsl_plot_canvas.axes.plot(time_axis, data_to_plot, 
+                                                    label='EEG', linewidth=1)
+                
+                # Set up simple visualization
+                self.pylsl_plot_canvas.axes.set_title("Real-time EEG Data")
+                self.pylsl_plot_canvas.axes.set_xlabel("Sample Points")
+                self.pylsl_plot_canvas.axes.set_ylabel("Amplitude (µV)")
+                
+                # Add grid for better readability
+                self.pylsl_plot_canvas.axes.grid(True, alpha=0.3)
+                
+                # Show legend only for reasonable number of channels
+                if n_channels <= 4:
+                    self.pylsl_plot_canvas.axes.legend(loc='upper right', fontsize=8)
+                
+                # Auto-scale y-axis for better visibility
+                if len(data_to_plot.shape) > 1 and n_channels > 1:
+                    # For multiple channels, set fixed y-limits based on offsets
+                    y_margin = 50
+                    channels_shown = min(n_channels, 8)
+                    self.pylsl_plot_canvas.axes.set_ylim(-y_margin, (channels_shown-1) * 100 + y_margin)
+                
+                # Redraw the plot
+                self.pylsl_plot_canvas.draw()
+                print("DEBUG: Plot updated successfully")
+                
+        except Exception as e:
+            print(f"DEBUG: Simple plot error: {e}")
+            import traceback
+            traceback.print_exc()
     
     def start_pylsl_recording(self):
         """Start recording PyLSL data"""
