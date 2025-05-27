@@ -69,7 +69,7 @@ class ModelTrainer:
             import torch.nn as nn
             import torch.optim as optim
             from torch.utils.data import DataLoader, TensorDataset
-            from src.model.eeg_inception_erp import EEGModel
+            from model.models.eeg_inception_erp import EEGModel
             
             # Get data for this fold
             train_windows = self.windows[train_idx]
