@@ -2,6 +2,7 @@ import sys
 import os
 import numpy as np
 import time
+import traceback
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
     QPushButton, QTabWidget, QLabel, QFileDialog,
@@ -799,12 +800,11 @@ class MainWindow(QMainWindow):
             # Get stream info
             n_channels = info.channel_count()
             sample_rate = int(info.nominal_srate())
-            
-            # Store sample rate for later use
+              # Store sample rate for later use
             self.current_sample_rate = sample_rate if sample_rate > 0 else 125
             
-            # Initialize buffer (store last 5 seconds of data)
-            buffer_size = self.current_sample_rate * 5
+            # Initialize buffer (store last 400 samples of data)
+            buffer_size = 400
             self.pylsl_buffer = deque(maxlen=buffer_size)
             self.pylsl_time_buffer = deque(maxlen=buffer_size)  # Separate time buffer
             
@@ -918,46 +918,48 @@ class MainWindow(QMainWindow):
                 # Determine number of channels
                 n_channels = data_array.shape[1] if len(data_array.shape) > 1 else 1
                 print(f"DEBUG: Number of channels: {n_channels}")
-                
-                # Get the last portion of data for display (e.g., last 500 samples)
-                display_samples = min(500, len(data_array))
+                  # Get all available data for display (up to 400 samples)
+                display_samples = min(400, len(data_array))
                 data_to_plot = data_array[-display_samples:]
-                
-                # Create time axis
+                  # Create time axis
                 time_axis = np.arange(len(data_to_plot))
                 
                 if len(data_to_plot.shape) > 1:
-                    # Multiple channels - show first 8 for visibility
-                    channels_to_show = min(n_channels, 8)
+                    # Multiple channels - show all channels with channel-based Y-axis
+                    channels_to_show = min(n_channels, 16)  # Show up to 16 channels
                     for ch in range(channels_to_show):
                         channel_data = data_to_plot[:, ch]
-                        # Apply offset for channel separation
-                        offset = ch * 100  # Offset for better separation
-                        self.pylsl_plot_canvas.axes.plot(time_axis, channel_data + offset, 
+                        # Normalize each channel and offset by channel number
+                        normalized_data = (channel_data - np.mean(channel_data)) / (np.std(channel_data) + 1e-8)
+                        self.pylsl_plot_canvas.axes.plot(time_axis, normalized_data + ch, 
                                                         label=f'Ch {ch+1}', linewidth=1)
                 else:
                     # Single channel
                     self.pylsl_plot_canvas.axes.plot(time_axis, data_to_plot, 
                                                     label='EEG', linewidth=1)
                 
-                # Set up simple visualization
+                # Set up simple visualization with channel-based Y-axis
                 self.pylsl_plot_canvas.axes.set_title("Real-time EEG Data")
                 self.pylsl_plot_canvas.axes.set_xlabel("Sample Points")
-                self.pylsl_plot_canvas.axes.set_ylabel("Amplitude (µV)")
+                self.pylsl_plot_canvas.axes.set_ylabel("Channels")
                 
                 # Add grid for better readability
                 self.pylsl_plot_canvas.axes.grid(True, alpha=0.3)
+                
+                # Set Y-axis to show channel numbers
+                if len(data_to_plot.shape) > 1 and n_channels > 1:
+                    channels_shown = min(n_channels, 16)
+                    self.pylsl_plot_canvas.axes.set_ylim(-0.5, channels_shown - 0.5)
+                    # Set Y-tick labels to show channel numbers
+                    self.pylsl_plot_canvas.axes.set_yticks(range(channels_shown))
+                    self.pylsl_plot_canvas.axes.set_yticklabels([f'Ch {i+1}' for i in range(channels_shown)])
                 
                 # Show legend only for reasonable number of channels
                 if n_channels <= 4:
                     self.pylsl_plot_canvas.axes.legend(loc='upper right', fontsize=8)
                 
-                # Auto-scale y-axis for better visibility
-                if len(data_to_plot.shape) > 1 and n_channels > 1:
-                    # For multiple channels, set fixed y-limits based on offsets
-                    y_margin = 50
-                    channels_shown = min(n_channels, 8)
-                    self.pylsl_plot_canvas.axes.set_ylim(-y_margin, (channels_shown-1) * 100 + y_margin)
+                # Auto-scale X-axis for better visibility
+                self.pylsl_plot_canvas.axes.set_xlim(0, len(data_to_plot))
                 
                 # Redraw the plot
                 self.pylsl_plot_canvas.draw()
