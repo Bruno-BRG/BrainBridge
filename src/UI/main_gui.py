@@ -22,6 +22,29 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 
+# PyLSL imports for real-time streaming
+try:
+    from pylsl import StreamInlet, resolve_streams
+    PYLSL_AVAILABLE = True
+except ImportError:
+    PYLSL_AVAILABLE = False
+    
+# Additional imports for real-time functionality
+from PyQt5.QtCore import QTimer
+from collections import deque
+import time
+from datetime import datetime
+
+# Import the StreamingWidget for PyLSL functionality
+try:
+    from .StreamingWidget import StreamingWidget
+except ImportError:
+    try:
+        from src.UI.StreamingWidget import StreamingWidget
+    except ImportError:
+        # Fallback if StreamingWidget is not available
+        StreamingWidget = None
+
 class TrainingThread(QThread):
     training_finished = pyqtSignal(object) # Signal to emit when training is done (can pass results)
     training_error = pyqtSignal(str)    # Signal to emit if an error occurs
@@ -596,7 +619,372 @@ class MainWindow(QMainWindow):
 
     def setup_pylsl_tab(self):
         layout = QVBoxLayout(self.pylsl_tab)
-        layout.addWidget(QLabel("PyLSL integration for OpenBCI live data will be here."))
+        
+        if not PYLSL_AVAILABLE:
+            # Display error message if PyLSL is not available
+            error_label = QLabel("PyLSL is not installed. Please install it to use this feature:")
+            error_label.setStyleSheet("color: red; font-weight: bold; font-size: 14px;")
+            
+            install_label = QLabel("pip install pylsl")
+            install_label.setStyleSheet("background-color: #f0f0f0; padding: 10px; font-family: monospace;")
+            
+            layout.addWidget(error_label)
+            layout.addWidget(install_label)
+            layout.addStretch()
+            return
+        
+        # Create PyLSL streaming widget
+        if StreamingWidget is not None:
+            try:
+                self.streaming_widget = StreamingWidget(self)
+                layout.addWidget(self.streaming_widget)
+            except Exception as e:
+                # Fallback to manual implementation if StreamingWidget fails
+                self.setup_manual_pylsl_tab(layout, str(e))
+        else:
+            # Manual implementation if StreamingWidget is not available
+            self.setup_manual_pylsl_tab(layout, "StreamingWidget not found")
+    
+    def setup_manual_pylsl_tab(self, layout, error_msg=""):
+        """Manual PyLSL implementation as fallback"""
+        
+        # Show error if any
+        if error_msg:
+            error_label = QLabel(f"StreamingWidget error: {error_msg}")
+            error_label.setStyleSheet("color: orange; font-size: 12px;")
+            layout.addWidget(error_label)
+        
+        # Stream connection group
+        connection_group = QGroupBox("Stream Connection")
+        connection_layout = QVBoxLayout()
+        
+        # Stream controls
+        stream_controls_layout = QHBoxLayout()
+        self.pylsl_start_btn = QPushButton("Start LSL Stream")
+        self.pylsl_stop_btn = QPushButton("Stop Stream")
+        self.pylsl_refresh_btn = QPushButton("Refresh Streams")
+        self.pylsl_stop_btn.setEnabled(False)
+        
+        stream_controls_layout.addWidget(self.pylsl_start_btn)
+        stream_controls_layout.addWidget(self.pylsl_stop_btn)
+        stream_controls_layout.addWidget(self.pylsl_refresh_btn)
+        connection_layout.addLayout(stream_controls_layout)
+        
+        # Stream status
+        self.pylsl_status_label = QLabel("Status: Disconnected")
+        self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ffcccc;")
+        connection_layout.addWidget(self.pylsl_status_label)
+        
+        # Stream info
+        self.pylsl_info_text = QTextEdit()
+        self.pylsl_info_text.setMaximumHeight(100)
+        self.pylsl_info_text.setPlainText("No stream information available")
+        connection_layout.addWidget(self.pylsl_info_text)
+        
+        connection_group.setLayout(connection_layout)
+        layout.addWidget(connection_group)
+        
+        # Real-time visualization group
+        visualization_group = QGroupBox("Real-time EEG Visualization")
+        visualization_layout = QVBoxLayout()
+        
+        # Plot canvas for real-time data
+        self.pylsl_plot_canvas = PlotCanvas(self, width=10, height=8, dpi=80)
+        visualization_layout.addWidget(self.pylsl_plot_canvas)
+        
+        # Visualization controls
+        viz_controls_layout = QHBoxLayout()
+        self.pylsl_channel_display = QLabel("Channels: 0")
+        self.pylsl_sample_rate = QLabel("Sample Rate: 0 Hz")
+        self.pylsl_buffer_size = QLabel("Buffer: 0 samples")
+        
+        viz_controls_layout.addWidget(self.pylsl_channel_display)
+        viz_controls_layout.addWidget(self.pylsl_sample_rate)
+        viz_controls_layout.addWidget(self.pylsl_buffer_size)
+        visualization_layout.addLayout(viz_controls_layout)
+        
+        visualization_group.setLayout(visualization_layout)
+        layout.addWidget(visualization_group)
+        
+        # Data recording group
+        recording_group = QGroupBox("Data Recording")
+        recording_layout = QVBoxLayout()
+        
+        # Recording controls
+        recording_controls_layout = QHBoxLayout()
+        self.pylsl_record_btn = QPushButton("Start Recording")
+        self.pylsl_stop_record_btn = QPushButton("Stop Recording")
+        self.pylsl_save_btn = QPushButton("Save Data")
+        self.pylsl_stop_record_btn.setEnabled(False)
+        self.pylsl_save_btn.setEnabled(False)
+        
+        recording_controls_layout.addWidget(self.pylsl_record_btn)
+        recording_controls_layout.addWidget(self.pylsl_stop_record_btn)
+        recording_controls_layout.addWidget(self.pylsl_save_btn)
+        recording_layout.addLayout(recording_controls_layout)
+        
+        # Recording status
+        self.pylsl_recording_status = QLabel("Recording: Not started")
+        self.pylsl_recording_status.setStyleSheet("padding: 5px;")
+        recording_layout.addWidget(self.pylsl_recording_status)
+        
+        recording_group.setLayout(recording_layout)
+        layout.addWidget(recording_group)
+        
+        # Initialize PyLSL variables
+        self.pylsl_inlet = None
+        self.pylsl_buffer = None
+        self.pylsl_timer = QTimer()
+        self.pylsl_timer.timeout.connect(self.update_pylsl_plot)
+        self.pylsl_recording_data = []
+        self.pylsl_is_recording = False
+        
+        # Connect signals
+        self.pylsl_start_btn.clicked.connect(self.start_pylsl_stream)
+        self.pylsl_stop_btn.clicked.connect(self.stop_pylsl_stream)
+        self.pylsl_refresh_btn.clicked.connect(self.refresh_pylsl_streams)
+        self.pylsl_record_btn.clicked.connect(self.start_pylsl_recording)
+        self.pylsl_stop_record_btn.clicked.connect(self.stop_pylsl_recording)
+        self.pylsl_save_btn.clicked.connect(self.save_pylsl_data)
+        
+        # Auto-refresh streams on load
+        self.refresh_pylsl_streams()
+    
+    def refresh_pylsl_streams(self):
+        """Refresh available LSL streams"""
+        if not PYLSL_AVAILABLE:
+            return
+            
+        try:
+            streams = resolve_streams(wait_time=1.0)
+            eeg_streams = [s for s in streams if s.type() == 'EEG']
+            
+            info_text = f"Found {len(streams)} total streams, {len(eeg_streams)} EEG streams:\n"
+            for i, stream in enumerate(eeg_streams):
+                info_text += f"  {i+1}. {stream.name()} - {stream.channel_count()} channels @ {stream.nominal_srate()} Hz\n"
+            
+            if not eeg_streams:
+                info_text += "No EEG streams found. Make sure your EEG device is streaming to LSL."
+            
+            self.pylsl_info_text.setPlainText(info_text)
+            
+            # Enable start button if EEG streams are available
+            self.pylsl_start_btn.setEnabled(len(eeg_streams) > 0)
+            
+        except Exception as e:
+            self.pylsl_info_text.setPlainText(f"Error refreshing streams: {str(e)}")
+            self.pylsl_start_btn.setEnabled(False)
+    
+    def start_pylsl_stream(self):
+        """Start PyLSL streaming"""
+        if not PYLSL_AVAILABLE:
+            QMessageBox.warning(self, "PyLSL Not Available", 
+                              "PyLSL is not installed. Please install it with: pip install pylsl")
+            return
+        
+        try:
+            streams = resolve_streams(wait_time=1.0)
+            eeg_streams = [s for s in streams if s.type() == 'EEG']
+            
+            if not eeg_streams:
+                QMessageBox.warning(self, "No EEG Streams", 
+                                  "No EEG streams found. Make sure your device is streaming.")
+                return
+            
+            # Connect to the first EEG stream
+            self.pylsl_inlet = StreamInlet(eeg_streams[0], max_buflen=1)
+            info = self.pylsl_inlet.info()
+            
+            # Get stream info
+            n_channels = info.channel_count()
+            sample_rate = int(info.nominal_srate())
+            
+            # Initialize buffer (store last 5 seconds of data)
+            buffer_size = sample_rate * 5
+            self.pylsl_buffer = deque(maxlen=buffer_size)
+            
+            # Update UI
+            self.pylsl_channel_display.setText(f"Channels: {n_channels}")
+            self.pylsl_sample_rate.setText(f"Sample Rate: {sample_rate} Hz")
+            self.pylsl_buffer_size.setText(f"Buffer: {buffer_size} samples")
+            self.pylsl_status_label.setText("Status: Connected")
+            self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ccffcc;")
+            
+            # Enable/disable buttons
+            self.pylsl_start_btn.setEnabled(False)
+            self.pylsl_stop_btn.setEnabled(True)
+            self.pylsl_record_btn.setEnabled(True)
+            
+            # Start updating plot
+            self.pylsl_timer.start(50)  # Update every 50ms (20 Hz)
+            
+            QMessageBox.information(self, "Stream Started", 
+                                  f"Successfully connected to EEG stream:\n"
+                                  f"Channels: {n_channels}\n"
+                                  f"Sample Rate: {sample_rate} Hz")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Stream Error", f"Failed to start stream: {str(e)}")
+    
+    def stop_pylsl_stream(self):
+        """Stop PyLSL streaming"""
+        try:
+            self.pylsl_timer.stop()
+            self.pylsl_inlet = None
+            self.pylsl_buffer = None
+            
+            # Update UI
+            self.pylsl_status_label.setText("Status: Disconnected")
+            self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ffcccc;")
+            
+            # Clear plot
+            self.pylsl_plot_canvas.axes.clear()
+            self.pylsl_plot_canvas.draw()
+            
+            # Enable/disable buttons
+            self.pylsl_start_btn.setEnabled(True)
+            self.pylsl_stop_btn.setEnabled(False)
+            self.pylsl_record_btn.setEnabled(False)
+            
+            # Stop recording if active
+            if self.pylsl_is_recording:
+                self.stop_pylsl_recording()
+            
+            QMessageBox.information(self, "Stream Stopped", "LSL stream disconnected")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Stop Error", f"Error stopping stream: {str(e)}")
+    
+    def update_pylsl_plot(self):
+        """Update real-time plot with new data"""
+        if not self.pylsl_inlet or not self.pylsl_buffer:
+            return
+        
+        try:
+            # Pull new samples
+            samples, timestamps = self.pylsl_inlet.pull_chunk(timeout=0.0, max_samples=32)
+            
+            if samples:
+                # Add to buffer
+                self.pylsl_buffer.extend(samples)
+                
+                # Add to recording if active
+                if self.pylsl_is_recording:
+                    self.pylsl_recording_data.extend([(sample, timestamp) for sample, timestamp in zip(samples, timestamps)])
+                
+                # Update plot with recent data
+                if len(self.pylsl_buffer) > 0:
+                    # Get last 2 seconds of data for plotting
+                    plot_samples = min(500, len(self.pylsl_buffer))
+                    recent_data = list(self.pylsl_buffer)[-plot_samples:]
+                    
+                    if recent_data:
+                        data_array = np.array(recent_data)
+                        
+                        # Clear and plot
+                        self.pylsl_plot_canvas.axes.clear()
+                        
+                        # Plot each channel
+                        n_channels = data_array.shape[1] if len(data_array.shape) > 1 else 1
+                        
+                        if len(data_array.shape) > 1:
+                            # Multiple channels
+                            for ch in range(min(n_channels, 16)):  # Limit to 16 channels for visibility
+                                channel_data = data_array[:, ch]
+                                # Offset each channel for better visualization
+                                offset = ch * 100
+                                self.pylsl_plot_canvas.axes.plot(channel_data + offset, 
+                                                                label=f'Ch {ch+1}', alpha=0.7)
+                        else:
+                            # Single channel
+                            self.pylsl_plot_canvas.axes.plot(data_array, label='EEG')
+                        
+                        self.pylsl_plot_canvas.axes.set_title("Real-time EEG Data")
+                        self.pylsl_plot_canvas.axes.set_xlabel("Samples")
+                        self.pylsl_plot_canvas.axes.set_ylabel("Amplitude (µV)")
+                        
+                        if n_channels <= 8:  # Only show legend for small number of channels
+                            self.pylsl_plot_canvas.axes.legend()
+                        
+                        self.pylsl_plot_canvas.draw()
+        
+        except Exception as e:
+            print(f"Plot update error: {e}")
+    
+    def start_pylsl_recording(self):
+        """Start recording PyLSL data"""
+        self.pylsl_recording_data = []
+        self.pylsl_is_recording = True
+        
+        self.pylsl_recording_status.setText("Recording: Active")
+        self.pylsl_recording_status.setStyleSheet("padding: 5px; background-color: #ffcccc;")
+        
+        self.pylsl_record_btn.setEnabled(False)
+        self.pylsl_stop_record_btn.setEnabled(True)
+        
+        QMessageBox.information(self, "Recording Started", "EEG data recording started")
+    
+    def stop_pylsl_recording(self):
+        """Stop recording PyLSL data"""
+        self.pylsl_is_recording = False
+        
+        samples_recorded = len(self.pylsl_recording_data)
+        self.pylsl_recording_status.setText(f"Recording: Stopped ({samples_recorded} samples)")
+        self.pylsl_recording_status.setStyleSheet("padding: 5px; background-color: #ccffcc;")
+        
+        self.pylsl_record_btn.setEnabled(True)
+        self.pylsl_stop_record_btn.setEnabled(False)
+        self.pylsl_save_btn.setEnabled(samples_recorded > 0)
+        
+        QMessageBox.information(self, "Recording Stopped", 
+                              f"Recording stopped. {samples_recorded} samples recorded.")
+    
+    def save_pylsl_data(self):
+        """Save recorded PyLSL data to file"""
+        if not self.pylsl_recording_data:
+            QMessageBox.warning(self, "No Data", "No recorded data to save")
+            return
+        
+        try:
+            # Open save dialog
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Save EEG Data", 
+                f"eeg_recording_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                "CSV files (*.csv);;NumPy files (*.npy);;All files (*.*)"
+            )
+            
+            if file_path:
+                # Extract samples and timestamps
+                samples = [item[0] for item in self.pylsl_recording_data]
+                timestamps = [item[1] for item in self.pylsl_recording_data]
+                
+                if file_path.endswith('.npy'):
+                    # Save as NumPy array
+                    data_dict = {
+                        'samples': np.array(samples),
+                        'timestamps': np.array(timestamps)
+                    }
+                    np.save(file_path, data_dict)
+                else:
+                    # Save as CSV
+                    data_array = np.array(samples)
+                    
+                    # Create DataFrame
+                    import pandas as pd
+                    if len(data_array.shape) > 1:
+                        columns = [f'Ch_{i+1}' for i in range(data_array.shape[1])]
+                        df = pd.DataFrame(data_array, columns=columns)
+                    else:
+                        df = pd.DataFrame(data_array, columns=['EEG'])
+                    
+                    df['Timestamp'] = timestamps
+                    df.to_csv(file_path, index=False)
+                
+                QMessageBox.information(self, "Data Saved", f"EEG data saved to:\n{file_path}")
+                self.pylsl_save_btn.setEnabled(False)
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save data: {str(e)}")
 
 
 # Matplotlib Canvas Widget
