@@ -689,9 +689,8 @@ class MainWindow(QMainWindow):
         # Real-time visualization group
         visualization_group = QGroupBox("Real-time EEG Visualization")
         visualization_layout = QVBoxLayout()
-        
-        # Plot canvas for real-time data
-        self.pylsl_plot_canvas = PlotCanvas(self, width=10, height=8, dpi=80)
+          # Plot canvas for real-time data
+        self.pylsl_plot_canvas = PlotCanvas(self, width=10, height=12, dpi=80)
         visualization_layout.addWidget(self.pylsl_plot_canvas)
         
         # Visualization controls
@@ -920,8 +919,7 @@ class MainWindow(QMainWindow):
                 print(f"DEBUG: Number of channels: {n_channels}")
                   # Get all available data for display (up to 400 samples)
                 display_samples = min(400, len(data_array))
-                data_to_plot = data_array[-display_samples:]
-                  # Create time axis
+                data_to_plot = data_array[-display_samples:]                # Create time axis
                 time_axis = np.arange(len(data_to_plot))
                 
                 if len(data_to_plot.shape) > 1:
@@ -929,10 +927,12 @@ class MainWindow(QMainWindow):
                     channels_to_show = min(n_channels, 16)  # Show up to 16 channels
                     for ch in range(channels_to_show):
                         channel_data = data_to_plot[:, ch]
-                        # Normalize each channel and offset by channel number
+                        # Normalize each channel and scale down to fit within channel spacing
                         normalized_data = (channel_data - np.mean(channel_data)) / (np.std(channel_data) + 1e-8)
-                        self.pylsl_plot_canvas.axes.plot(time_axis, normalized_data + ch, 
-                                                        label=f'Ch {ch+1}', linewidth=1)
+                        # Scale the normalized data to be much smaller (0.15 units high per channel)
+                        scaled_data = normalized_data * 0.15
+                        self.pylsl_plot_canvas.axes.plot(time_axis, scaled_data + ch, 
+                                                        label=f'Ch {ch+1}', linewidth=0.8)
                 else:
                     # Single channel
                     self.pylsl_plot_canvas.axes.plot(time_axis, data_to_plot, 
@@ -945,11 +945,11 @@ class MainWindow(QMainWindow):
                 
                 # Add grid for better readability
                 self.pylsl_plot_canvas.axes.grid(True, alpha=0.3)
-                
-                # Set Y-axis to show channel numbers
+                  # Set Y-axis to show channel numbers with proper spacing
                 if len(data_to_plot.shape) > 1 and n_channels > 1:
                     channels_shown = min(n_channels, 16)
-                    self.pylsl_plot_canvas.axes.set_ylim(-0.5, channels_shown - 0.5)
+                    # Add more margin between channels by expanding Y-limits
+                    self.pylsl_plot_canvas.axes.set_ylim(-0.7, channels_shown - 0.3)
                     # Set Y-tick labels to show channel numbers
                     self.pylsl_plot_canvas.axes.set_yticks(range(channels_shown))
                     self.pylsl_plot_canvas.axes.set_yticklabels([f'Ch {i+1}' for i in range(channels_shown)])
