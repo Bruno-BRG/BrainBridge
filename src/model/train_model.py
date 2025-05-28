@@ -9,7 +9,7 @@ matplotlib.use('Agg') # Then set backend. Must be before importing pyplot.
 import matplotlib.pyplot as plt # Then import pyplot
 from torch.utils.data import DataLoader
 from src.data.data_loader import BCIDataLoader
-from model.models.eeg_inception_erp import EEGModel
+from .eeg_inception_erp import EEGModel
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import train_test_split, KFold
 import argparse # Added argparse for CLI argument parsing
