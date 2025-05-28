@@ -22,6 +22,12 @@
   - [ ] gui-training-start-action – _Implement button to start the model training process._
   - [ ] gui-training-progress-display – _Display training progress and results in the GUI (e.g., logs, metrics, plots)._
   - [x] 2025-05-26 gui-exit-functionality – _Implement an exit or quit button/menu option._
+- [ ] refactor-model-oop – _Refactor model components to adhere to OOP principles and NASA-grade standards._
+  - [x] refactor-model-create-base-class – _Create an abstract BaseModel class with a defined interface (save, load, forward, device, etc.)._
+  - [x] refactor-eegmodel-to-use-basemodel – _Refactor EEGInceptionERPModel to inherit from BaseModel and implement its interface._
+  - [x] refactor-train-model-script – _Update train_model.py to use the refactored EEGInceptionERPModel (inheriting from BaseModel)._
+  - [ ] refactor-model-documentation – _Ensure all model classes have NASA-grade docstrings and input validation._
+  - [ ] refactor-model-file-structure – _Ensure each model class resides in its own file._
 
 ## Review / Testing
 

@@ -1,5 +1,13 @@
 """
-Full training script for EEGInceptionERP model using real EEG data with K-fold cross-validation
+Class:   ModelTrainer (Conceptual - this file contains training orchestration)
+Purpose: Trains EEG classification models using K-fold cross-validation.
+Author:  GitHub Copilot (NASA-style guidelines)
+Created: 2025-05-28
+License: BSD (3-clause) # Assuming BSD, verify actual license
+Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
+         Orchestrates the training and validation of EEG models (e.g., EEGModel)
+         including data loading, K-fold splitting, epoch training, validation,
+         early stopping, model saving, and results visualization.
 """
 import os
 import torch
@@ -9,7 +17,7 @@ matplotlib.use('Agg') # Then set backend. Must be before importing pyplot.
 import matplotlib.pyplot as plt # Then import pyplot
 from torch.utils.data import DataLoader
 from src.data.data_loader import BCIDataLoader
-from .eeg_inception_erp import EEGModel
+from .eeg_inception_erp import EEGInceptionERPModel # Changed from EEGModel
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import train_test_split, KFold
 import argparse # Added argparse for CLI argument parsing
@@ -22,7 +30,26 @@ EARLY_STOPPING_PATIENCE = 5
 # K_FOLDS = 5 # Will be passed as a parameter
 TEST_SPLIT = 0.2  # Hold out test set before K-fold
 
-def train_epoch(model, dataloader, criterion, optimizer, device):
+def train_epoch(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> tuple[float, float]: # Changed EEGModel to EEGInceptionERPModel
+    """
+    Performs a single training epoch for the given model.
+
+    Args:
+        model (EEGInceptionERPModel): The neural network model to train. # Changed type hint
+        dataloader (DataLoader): DataLoader providing training data batches.
+        criterion (torch.nn.Module): The loss function (e.g., CrossEntropyLoss).
+        optimizer (torch.optim.Optimizer): The optimization algorithm (e.g., Adam).
+        device (torch.device): The device (CPU or CUDA) to perform training on.
+
+    Returns:
+        tuple[float, float]: A tuple containing the average epoch loss and epoch accuracy.
+    
+    Raises:
+        # This function primarily relies on PyTorch, exceptions would typically be
+        # RuntimeError from PyTorch operations if inputs are malformed, device issues, etc.
+        # Explicit custom exceptions are not raised here.
+        pass
+    """
     model.train()
     running_loss = 0.0
     correct = 0
@@ -47,7 +74,23 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
-def validate(model, dataloader, criterion, device):
+def validate(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: torch.nn.Module, device: torch.device) -> tuple[float, float]: # Changed EEGModel to EEGInceptionERPModel
+    """
+    Validates the model on the given dataset.
+
+    Args:
+        model (EEGInceptionERPModel): The neural network model to validate. # Changed type hint
+        dataloader (DataLoader): DataLoader providing validation data batches.
+        criterion (torch.nn.Module): The loss function.
+        device (torch.device): The device (CPU or CUDA) to perform validation on.
+
+    Returns:
+        tuple[float, float]: A tuple containing the average validation loss and validation accuracy.
+
+    Raises:
+        # Similar to train_epoch, relies on PyTorch for operational exceptions.
+        pass
+    """
     model.eval()
     running_loss = 0.0
     correct = 0
@@ -68,23 +111,47 @@ def validate(model, dataloader, criterion, device):
     val_acc = correct / total
     return val_loss, val_acc # Added return values
 
-def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epochs, learning_rate, early_stopping_patience, batch_size, model_base_path, model_name): # Added model_name
+def train_single_fold(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    fold_num: int | str, # Can be int for fold number or str like "final"
+    device: torch.device,
+    num_epochs: int,
+    learning_rate: float,
+    early_stopping_patience: int,
+    batch_size: int,
+    model_base_path: str,
+    model_name: str
+) -> tuple[float, dict]:
     """
-    Train model for a single fold
-    
+    Trains and validates a model for a single fold of K-fold cross-validation or for final training.
+
     Args:
-        X_train, y_train: Training data and labels
-        X_val, y_val: Validation data and labels
-        fold_num: Current fold number
-        device: Training device
-        num_epochs: Number of epochs to train for
-        learning_rate: Learning rate for the optimizer
-        early_stopping_patience: Patience for early stopping
-        batch_size: Batch size for DataLoader
-        
+        X_train (np.ndarray): Training feature data (windows, channels, timepoints).
+        y_train (np.ndarray): Training labels.
+        X_val (np.ndarray): Validation feature data.
+        y_val (np.ndarray): Validation labels.
+        fold_num (int | str): Identifier for the current fold (e.g., 1, 2, ..., or "final").
+        device (torch.device): Device for training (e.g., torch.device("cuda")).
+        num_epochs (int): Maximum number of epochs for training.
+        learning_rate (float): Learning rate for the optimizer.
+        early_stopping_patience (int): Number of epochs to wait for improvement before stopping.
+        batch_size (int): Number of samples per training batch.
+        model_base_path (str): Base directory path where model files will be saved.
+        model_name (str): Name of the model, used for creating a subdirectory within `model_base_path`.
+
     Returns:
-        best_val_acc: Best validation accuracy achieved
-        training_history: Dictionary with training metrics
+        tuple[float, dict]: A tuple containing:
+            - best_val_acc (float): The best validation accuracy achieved during this fold/training.
+            - training_history (dict): A dictionary containing lists of training losses,
+              training accuracies, validation losses, and validation accuracies per epoch.
+    
+    Raises:
+        ValueError: If `n_outputs` cannot be determined from `y_train` (e.g. empty `y_train`).
+        FileNotFoundError: If `model_base_path` or `model_name` subdirectories cannot be created.
+        # Other exceptions can be raised by PyTorch operations or EEGModel instantiation.
     """
     # Create dataloaders
     train_loader = DataLoader(list(zip(X_train, y_train)), 
@@ -97,11 +164,15 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epoc
     n_times = X_train.shape[2]
     n_outputs = len(np.unique(y_train))  # Use n_outputs instead of n_classes
 
-    model = EEGModel(
+    model = EEGInceptionERPModel( # Changed from EEGModel
         n_chans=n_channels,
-        n_outputs=n_outputs,  # Updated parameter name
+        n_outputs=n_outputs,
         n_times=n_times,
-        sfreq=125
+        sfreq=125, # Assuming sfreq is fixed or obtained elsewhere if dynamic. EEGInceptionERPModel default is 250.
+                   # This should be consistent with data preprocessing. For now, using 125 as in previous EEGModel call.
+                   # The EEGInceptionERPModel will use this sfreq if provided.
+        model_name=model_name, # Pass the overall model_name for this run
+        # model_version can use default "1.0" from EEGInceptionERPModel
     ).to(device)
     
     # Loss and optimizer
@@ -147,9 +218,10 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epoc
             best_val_loss = val_loss
             patience_counter = 0
             # Save best model for this fold
+            model.set_trained(True) # Set trained status before saving
             fold_model_save_path = os.path.join(model_base_path, model_name, f'eeg_inception_fold_{fold_num}.pth')
             os.makedirs(os.path.dirname(fold_model_save_path), exist_ok=True) # Ensure directory for this specific model exists
-            torch.save(model.state_dict(), fold_model_save_path)
+            model.save(fold_model_save_path) # Use model.save() method
         else:
             patience_counter += 1
             if patience_counter >= early_stopping_patience: # Use early_stopping_patience parameter
@@ -166,7 +238,54 @@ def train_single_fold(X_train, y_train, X_val, y_val, fold_num, device, num_epoc
     print(f"  Fold {fold_num} completed - Best Val Acc: {best_val_acc:.4f}")
     return best_val_acc, training_history
 
-def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_rate=0.001, early_stopping_patience=5, batch_size=32, test_split_ratio=0.2, data_base_path="eeg_data", runs_to_include=None, model_name="unnamed_model"): # Added model_name parameter
+def main(
+    subjects_to_use: list[int] | str | None = None,
+    num_epochs_per_fold: int = 50,
+    num_k_folds: int = 5,
+    learning_rate: float = 0.001,
+    early_stopping_patience: int = 5,
+    batch_size: int = 32,
+    test_split_ratio: float = 0.2,
+    data_base_path: str = "eeg_data",
+    runs_to_include: list[int] | None = None,
+    model_name: str = "unnamed_model"
+) -> dict:
+    """
+    Main function to orchestrate the EEG model training and evaluation pipeline.
+
+    This function loads data, performs K-fold cross-validation, trains a final model,
+    and generates plots summarizing the training results.
+
+    Args:
+        subjects_to_use (list[int] | str | None, optional): List of subject IDs (integers),
+            the string "all", or None. If None, defaults to subjects 1-10. Defaults to None.
+        num_epochs_per_fold (int, optional): Max epochs for each fold. Defaults to 50.
+        num_k_folds (int, optional): Number of folds for cross-validation. Defaults to 5.
+        learning_rate (float, optional): Optimizer learning rate. Defaults to 0.001.
+        early_stopping_patience (int, optional): Patience for early stopping. Defaults to 5.
+        batch_size (int, optional): Training batch size. Defaults to 32.
+        test_split_ratio (float, optional): Proportion of data for the hold-out test set (0.0-1.0).
+            Defaults to 0.2.
+        data_base_path (str, optional): Path to the base EEG data directory. Defaults to "eeg_data".
+        runs_to_include (list[int] | None, optional): Specific runs to include from the dataset.
+            If None, defaults to [4, 8, 12] (motor imagery runs). Defaults to None.
+        model_name (str, optional): Name for the current model run. This will be used to create
+            a subdirectory under "models/" for saving model files and plots. Defaults to "unnamed_model".
+
+    Returns:
+        dict: A dictionary containing key training outcomes:
+            - "cv_mean_accuracy" (float): Mean accuracy across K-folds.
+            - "cv_std_accuracy" (float): Standard deviation of accuracy across K-folds.
+            - "final_test_accuracy" (float): Accuracy on the final hold-out test set.
+            - "plot_path" (str): Path to the saved summary plot image.
+            - "model_name" (str): The name of the model used for this run.
+
+    Raises:
+        ValueError: If `subjects_to_use` is invalid type, or if `test_split_ratio` is not in [0,1].
+        FileNotFoundError: If `data_base_path` does not exist or is inaccessible.
+        RuntimeError: If no data is loaded (e.g., `windows.size == 0`).
+        # Other exceptions can be raised by underlying functions (data loading, model training).
+    """
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -202,7 +321,8 @@ def main(subjects_to_use=None, num_epochs_per_fold=50, num_k_folds=5, learning_r
 
     if windows.size == 0:
         print("No data loaded. Exiting training.")
-        return
+        # Consider raising an error or returning a specific status
+        raise RuntimeError("No data loaded from BCIDataLoader. Cannot proceed with training.")
     
     print(f"Data loaded. Shapes: Windows-{windows.shape}, Labels-{labels.shape}, Subject IDs-{subject_ids.shape}")
     print(f"Unique labels: {np.unique(labels)}, Counts: {np.bincount(labels)}")
