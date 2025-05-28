@@ -15,9 +15,9 @@
   - [x] 2025-05-26 gui-training-custom-params – _Create input fields for custom parameters (epochs, k-folds, learning rate, early stopping, batch size, test split)._
   - [x] 2025-05-27 gui-pylsl-integration – _Integrate PyLSL for real-time EEG streaming with simple static visualization._
   - [x] refactor-gui-data-tab-oop – _Refactor Data Management tab into its own class._
-  - [ ] refactor-gui-training-tab-oop – _Refactor Model Training tab into its own class._
-  - [ ] refactor-gui-pylsl-tab-oop – _Refactor OpenBCI Live (PyLSL) tab into its own class._
-  - [ ] refactor-training-thread-oop – _Move TrainingThread class to its own file._
+  - [x] refactor-gui-training-tab-oop – _Refactor Model Training tab into its own class._
+  - [x] refactor-gui-pylsl-tab-oop – _Refactor OpenBCI Live (PyLSL) tab into its own class._
+  - [x] refactor-training-thread-oop – _Move TrainingThread class to its own file._
   - [ ] gui-training-subject-input – _Allow user to specify subject IDs for training, defaulting to loaded subjects or a predefined set._
   - [ ] gui-training-start-action – _Implement button to start the model training process._
   - [ ] gui-training-progress-display – _Display training progress and results in the GUI (e.g., logs, metrics, plots)._
