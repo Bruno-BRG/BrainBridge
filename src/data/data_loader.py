@@ -137,8 +137,8 @@ class BCIDataLoader:
     
     def preprocess_data(self, 
                        eeg_data: np.ndarray, 
-                       lowcut: float = 8.0,  # Changed from 0.5 to 8.0
-                       highcut: float = 30.0,  # Changed from 50.0 to 30.0
+                       lowcut: float = 0.5,  # Changed from 0.5 to 8.0
+                       highcut: float = 50.0,  # Changed from 50.0 to 30.0
                        notch_freq: float = 50.0,
                        apply_standardization: bool = True) -> np.ndarray:
         """

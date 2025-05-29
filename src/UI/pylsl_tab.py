@@ -5,7 +5,8 @@ Purpose: Provides the user interface tab for discovering, connecting to,
          visualizing, and recording EEG data streams using the Lab Streaming
          Layer (LSL) library. It allows users to refresh available LSL streams,
          start/stop a selected stream, view real-time data plots, and
-         record/save the EEG data.
+         record/save the EEG data. Includes real-time inference capabilities
+         for trained EEG models.
 Author:  Bruno Rocha
 Created: 2025-05-28
 Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
@@ -18,12 +19,16 @@ import os
 import sys
 import numpy as np
 import traceback
+import torch
+import json
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QGroupBox, QLabel, QPushButton, QTextEdit, QHBoxLayout, QMessageBox, QFileDialog
+    QWidget, QVBoxLayout, QGroupBox, QLabel, QPushButton, QTextEdit, QHBoxLayout, 
+    QMessageBox, QFileDialog, QComboBox, QProgressBar, QSpinBox, QCheckBox, QFrame
 )
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal
 from collections import deque
 from datetime import datetime
+from typing import Optional, Dict, Any
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -49,6 +54,21 @@ except ImportError:
         from src.UI.StreamingWidget import StreamingWidget
     except ImportError:
         StreamingWidget = None
+
+# Import model classes and filtering utilities
+try:
+    from src.model.eeg_inception_erp import EEGInceptionERPModel
+    from src.model.eeg_it_net import EEGITNetModel
+    from src.model.EEGFilter import EEGFilter
+    from src.model.realtime_inference import RealTimeInferenceProcessor
+    MODELS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Model classes not available: {e}")
+    EEGInceptionERPModel = None
+    EEGITNetModel = None
+    EEGFilter = None
+    RealTimeInferenceProcessor = None
+    MODELS_AVAILABLE = False
 
 class PylslTab(QWidget):
     """
@@ -181,9 +201,45 @@ class PylslTab(QWidget):
         recording_group.setLayout(recording_layout)
         layout.addWidget(recording_group)
 
-        layout.addStretch()
+        # Inference group
+        inference_group = QGroupBox("Real-time Inference")
+        inference_layout = QVBoxLayout()
+        
+        self.model_selector = QComboBox()
+        self.model_selector.addItem("Select Model", userData=None)
+        self.model_selector.setEnabled(False)
+        inference_layout.addWidget(self.model_selector)
+        
+        self.start_inference_btn = QPushButton("Start Inference")
+        self.stop_inference_btn = QPushButton("Stop Inference")
+        self.start_inference_btn.setEnabled(False)
+        self.stop_inference_btn.setEnabled(False)
+        
+        inference_layout.addWidget(self.start_inference_btn)
+        inference_layout.addWidget(self.stop_inference_btn)
+        
+        self.inference_status = QLabel("Inference: Not started")
+        self.inference_status.setStyleSheet("padding: 5px;")
+        inference_layout.addWidget(self.inference_status)
+        
+        self.inference_progress = QProgressBar()
+        self.inference_progress.setRange(0, 100)
+        self.inference_progress.setValue(0)
+        inference_layout.addWidget(self.inference_progress)
+        
+        # Inference results display
+        self.inference_results_display = QTextEdit()
+        self.inference_results_display.setReadOnly(True)
+        self.inference_results_display.setMaximumHeight(150)
+        inference_layout.addWidget(self.inference_results_display)
+        
+        # Optional: Frame to visually separate inference section
+        self.inference_frame = QFrame()
+        self.inference_frame.setFrameShape(QFrame.StyledPanel)
+        self.inference_frame.setLayout(inference_layout)
+        layout.addWidget(self.inference_frame)
 
-        # Initialize PyLSL variables
+        layout.addStretch()        # Initialize PyLSL variables
         self.pylsl_inlet = None
         self.pylsl_buffer = None
         self.pylsl_time_buffer = None # Added for consistency
@@ -193,6 +249,11 @@ class PylslTab(QWidget):
         self.pylsl_is_recording = False
         self.current_sample_rate = 125  # Default sample rate
         
+        # Initialize inference variables
+        self.selected_model_info = None
+        self.inference_processor = None
+        self.inference_timer = None
+        
         # Connect signals
         self.pylsl_start_btn.clicked.connect(self.start_pylsl_stream)
         self.pylsl_stop_btn.clicked.connect(self.stop_pylsl_stream)
@@ -201,7 +262,114 @@ class PylslTab(QWidget):
         self.pylsl_stop_record_btn.clicked.connect(self.stop_pylsl_recording)
         self.pylsl_save_btn.clicked.connect(self.save_pylsl_data)
         
-        self.refresh_pylsl_streams() # Auto-refresh streams on load
+        # Inference connections
+        self.model_selector.currentIndexChanged.connect(self.on_model_selected)
+        self.start_inference_btn.clicked.connect(self.start_inference)
+        self.stop_inference_btn.clicked.connect(self.stop_inference)
+        
+        self.refresh_pylsl_streams() # Auto-refresh streams on load        # Load available models for inference
+        self._load_available_models()
+
+    def _load_available_models(self):
+        """
+        Loads and populates the model selector with available EEG models.
+
+        Scans the model directory for PyTorch model files (.pth, .pt) and
+        creates entries for known model types. For each model, adds an entry
+        to the model selector combobox.
+        """
+        if not MODELS_AVAILABLE:
+            return
+        try:
+            # Look for saved model files in common locations
+            model_dirs = [
+                os.path.join(project_root, "src", "model"),
+                os.path.join(project_root, "models"),
+                os.path.join(project_root, "saved_models"),
+                os.path.join(project_root, "checkpoints")
+            ]
+            
+            model_files = []
+            for model_dir in model_dirs:
+                if os.path.exists(model_dir):
+                    for ext in ['.pth', '.pt', '.pkl']:
+                        pattern = os.path.join(model_dir, f"*{ext}")
+                        import glob
+                        model_files.extend(glob.glob(pattern))
+            
+            if not model_files:
+                # Add demo models for testing if no real models found
+                self.model_selector.addItem("EEG Inception ERP (Demo)", userData={
+                    "name": "EEG Inception ERP (Demo)", 
+                    "type": "EEGInceptionERP",
+                    "path": None,
+                    "n_channels": 16,
+                    "demo": True
+                })
+                self.model_selector.addItem("EEG IT-Net (Demo)", userData={
+                    "name": "EEG IT-Net (Demo)", 
+                    "type": "EEGITNet",
+                    "path": None,
+                    "n_channels": 16,
+                    "demo": True
+                })
+                print("No trained model files found. Added demo models for testing.")
+                
+            else:
+                for model_file in model_files:
+                    filename = os.path.basename(model_file)
+                    name = os.path.splitext(filename)[0]
+                    
+                    # Try to infer model type from filename
+                    model_type = "EEGInceptionERP"  # Default
+                    if "itnet" in name.lower() or "it_net" in name.lower():
+                        model_type = "EEGITNet"
+                    elif "inception" in name.lower():
+                        model_type = "EEGInceptionERP"
+                    
+                    model_info = {
+                        "name": name,
+                        "type": model_type,
+                        "path": model_file,
+                        "n_channels": 16,  # Default, could be parsed from filename
+                        "demo": False
+                    }
+                    
+                    self.model_selector.addItem(name, userData=model_info)
+            
+            self.model_selector.setEnabled(True)
+            self.start_inference_btn.setEnabled(True)
+            
+        except Exception as e:
+            print(f"Error loading models: {e}")
+            self.start_inference_btn.setEnabled(False)
+            self.start_inference_btn.setEnabled(False)
+
+    def on_model_selected(self):
+        """
+        Handles the event when a model is selected from the combobox.
+
+        Updates the inference UI elements based on the selected model's properties.
+        """
+        current_index = self.model_selector.currentIndex()
+        model_info = self.model_selector.itemData(current_index)
+        
+        if model_info is not None:
+            # Update UI based on model info
+            self.selected_model_info = model_info
+            self.inference_status.setText(f"Selected Model: {model_info['name']}")
+            self.inference_status.setStyleSheet("padding: 5px; background-color: #ccffcc;")
+            
+            # Enable inference controls
+            self.start_inference_btn.setEnabled(True)
+            self.stop_inference_btn.setEnabled(False)
+        else:
+            # No valid model selected
+            self.selected_model_info = None
+            self.inference_status.setText("Inference: Not started")
+            self.inference_status.setStyleSheet("padding: 5px;")
+            self.start_inference_btn.setEnabled(False)
+            self.stop_inference_btn.setEnabled(False)
 
     def refresh_pylsl_streams(self):
         """
@@ -471,6 +639,183 @@ class PylslTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save data: {str(e)}\n{traceback.format_exc()}")
 
+    def start_inference(self):
+        """
+        Starts real-time inference on the EEG stream using the selected model.
+
+        Initializes the inference processor with the selected model and starts
+        the inference timer. Updates UI elements to reflect the inference state.
+        """
+        if not MODELS_AVAILABLE or self.selected_model_info is None:
+            QMessageBox.warning(self, "Model Not Selected", "Please select a valid model for inference")
+            return
+        
+        try:
+            # Get model information
+            model_type = self.selected_model_info.get("type", "unknown")
+            model_name = self.selected_model_info.get("name", "Unnamed Model")
+            model_path = self.selected_model_info.get("path")
+            n_channels = self.selected_model_info.get("n_channels", 16)
+            is_demo = self.selected_model_info.get("demo", False)
+            
+            # Initialize the model
+            model = None
+            if model_type == "EEGInceptionERP":
+                model = EEGInceptionERPModel()
+                if not is_demo and model_path and os.path.exists(model_path):
+                    model.load_state_dict(torch.load(model_path, map_location='cpu'))
+                    print(f"Loaded trained model from {model_path}")
+                else:
+                    print(f"Using demo model: {model_name}")
+            elif model_type == "EEGITNet":
+                model = EEGITNetModel()
+                if not is_demo and model_path and os.path.exists(model_path):
+                    model.load_state_dict(torch.load(model_path, map_location='cpu'))
+                    print(f"Loaded trained model from {model_path}")
+                else:
+                    print(f"Using demo model: {model_name}")
+            else:
+                QMessageBox.warning(self, "Unsupported Model", f"The selected model type '{model_type}' is not supported for inference")
+                return
+            
+            # Initialize the RealTimeInferenceProcessor
+            self.inference_processor = RealTimeInferenceProcessor(
+                model=model,
+                n_channels=n_channels,
+                sample_rate=self.current_sample_rate,
+                window_size=400,
+                filter_enabled=True,
+                l_freq=0.5,
+                h_freq=50.0
+            )
+            
+            # Setup inference timer for 30ms intervals (as requested)
+            self.inference_timer = QTimer(self)
+            self.inference_timer.setInterval(30)  # 30ms for real-time inference
+            self.inference_timer.timeout.connect(self.process_inference)
+            self.inference_timer.start()
+            
+            # Update UI
+            self.inference_status.setText(f"Inference: Active ({model_name})")
+            self.inference_status.setStyleSheet("padding: 5px; background-color: #ccffcc;")
+            self.start_inference_btn.setEnabled(False)
+            self.stop_inference_btn.setEnabled(True)
+            self.inference_progress.setValue(0)
+            
+            print(f"Started real-time inference with {model_name}")
+            print(f"Buffer size: 400 samples, Sample rate: {self.current_sample_rate} Hz")
+            print(f"Inference interval: 30ms")
+        except Exception as e:
+            QMessageBox.critical(self, "Inference Error", f"Failed to start inference: {str(e)}\n{traceback.format_exc()}")
+
+    def stop_inference(self):
+        """
+        Stops the real-time inference.
+
+        Stops the inference timer and processor, and updates UI elements to reflect
+        the stopped state.
+        """
+        try:
+            if hasattr(self, 'inference_timer'):
+                self.inference_timer.stop()
+                del self.inference_timer
+            
+            if hasattr(self, 'inference_processor'):
+                # Properly close or delete the inference processor if needed
+                del self.inference_processor
+            
+            self.inference_status.setText("Inference: Not started")
+            self.inference_status.setStyleSheet("padding: 5px;")
+            self.start_inference_btn.setEnabled(True)
+            self.stop_inference_btn.setEnabled(False)
+        except Exception as e:
+            QMessageBox.critical(self, "Stop Inference Error", f"Failed to stop inference: {str(e)}\n{traceback.format_exc()}")
+
+    def process_inference(self):
+        """
+        Processes a single step of inference.
+
+        Pulls the latest EEG data, runs it through the inference processor, and
+        updates the inference results display. This is called periodically by the
+        inference timer.
+        """
+        if not self.pylsl_inlet or self.pylsl_buffer is None or not hasattr(self, 'inference_processor'):
+            return
+        try:
+            # Pull latest samples from LSL stream
+            samples, timestamps = self.pylsl_inlet.pull_chunk(timeout=0.0, max_samples=10)
+            
+            if samples:
+                # Convert samples to numpy array with proper shape
+                samples_array = np.array(samples)
+                if samples_array.ndim == 1:
+                    samples_array = samples_array.reshape(1, -1)
+                
+                # Add each sample to the inference processor buffer
+                for sample in samples_array:
+                    # Run inference with the new sample
+                    results = self.inference_processor.predict(sample.reshape(1, -1))
+                    
+                    # Update results display only if we get a successful inference
+                    if results.get('status') == 'success':
+                        self._update_inference_results(results)
+                        
+                        # Update progress bar based on confidence
+                        confidence = results.get('confidence', 0)
+                        self.inference_progress.setValue(int(confidence * 100))
+            
+        except Exception as e:
+            print(f"DEBUG: Inference processing error: {e}")
+            # traceback.print_exc() # Enable for detailed trace
+
+    def _preprocess_samples(self, samples):
+        """
+        Preprocesses the raw EEG samples before inference.
+
+        Applies any necessary filtering, normalization, or reshaping to the samples
+        to prepare them for the inference model.
+
+        Args:
+            samples (list): The raw EEG samples to preprocess.
+
+        Returns:
+            np.ndarray: The preprocessed samples as a NumPy array.
+        """
+        if not samples or len(samples) == 0:
+            return np.array([])
+        try:
+            # Example preprocessing: Convert to NumPy array and normalize
+            samples_array = np.array(samples)
+            if samples_array.ndim == 1:
+                samples_array = samples_array.reshape(1, -1) # Reshape for single sample
+            
+            # Apply any model-specific preprocessing here
+            if hasattr(self, 'inference_processor') and hasattr(self.inference_processor, 'preprocess'):
+                samples_array = self.inference_processor.preprocess(samples_array)
+            
+            return samples_array
+        except Exception as e:
+            print(f"DEBUG: Preprocessing error: {e}")
+            return np.array(samples) # Fallback to raw samples on error
+
+    def _update_inference_results(self, results):
+        """
+        Updates the inference results display with the latest results.
+
+        Formats and displays the inference results in the results QTextEdit.
+
+        Args:
+            results (Any): The raw results from the inference processor.
+        """
+        if results is None:
+            return
+        try:
+            # Example: Format results as JSON string for display
+            formatted_results = json.dumps(results, indent=2)
+            self.inference_results_display.setPlainText(formatted_results)
+        except Exception as e:
+            print(f"DEBUG: Results formatting error: {e}")
+
     def clear_resources(self):
         """
         Cleans up resources like timers and LSL inlets.
@@ -484,6 +829,8 @@ class PylslTab(QWidget):
             self.pylsl_timer.stop()
             if self.pylsl_inlet:
                 self.pylsl_inlet.close_stream()
+            if hasattr(self, 'inference_timer'):
+                self.inference_timer.stop()
             print("PylslTab: Resources cleared.")
         except Exception as e:
             print(f"PylslTab: Error clearing resources: {e}")
