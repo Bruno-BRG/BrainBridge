@@ -34,7 +34,8 @@ def check_dependencies():
         'torch': '1.7.0',
         'matplotlib': '3.3.0',
         'seaborn': '0.11.0',
-        'scipy': '1.5.0'
+        'scipy': '1.5.0',
+        'braindecode': '0.8.0'
     }
     
     missing = []
@@ -98,15 +99,18 @@ def main():
 
     if args.mode == 'gui':
         logger.info("Launching GUI...")
-        start_gui()
+        start_gui()    
+        
     elif args.mode == 'train':
-        logger.info("Starting model training (placeholder - implement actual call)")
-        # Example: from src.model.train_model import main as train_script; train_script(args.config)
-        pass
+        logger.info("Starting model training...")
+        from src.model.train_model import main as train_script
+        train_script()
+    
     elif args.mode == 'cli':
-        logger.info("Launching CLI (placeholder - implement actual call)")
-        # Example: from src.cli.main_cli import main_menu as cli_main; cli_main()
-        pass
+        logger.info("Launching CLI...")
+        from src.cli.main_cli import main_menu
+        main_menu()
+    
     else:
         logger.error(f"Unknown mode: {args.mode}")
         sys.exit(1)
