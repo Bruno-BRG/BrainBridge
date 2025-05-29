@@ -1,3 +1,12 @@
+"""
+Classes: PlotCanvas, TrainingPlotCanvas
+Purpose: Provide Matplotlib canvas widgets for embedding plots within the PyQt5 GUI.
+         PlotCanvas is for general data plotting, TrainingPlotCanvas is specialized for EEG samples.
+Author:  Copilot (NASA-style guidelines)
+Created: 2025-05-28
+Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
+"""
+
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure

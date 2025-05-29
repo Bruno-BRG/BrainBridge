@@ -1,3 +1,12 @@
+"""
+Class:   BCIMainWindow
+Purpose: Main application window for the BCI project, hosting various tabs for data management, model training, and real-time interaction.
+Author:  Copilot (NASA-style guidelines)
+Created: 2025-05-28
+Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
+         Integrates different UI tabs and backend functionalities.
+"""
+
 import sys
 import os
 import numpy as np

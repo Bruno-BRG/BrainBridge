@@ -1,7 +1,7 @@
 """
 Class:   ModelTrainer (Conceptual - this file contains training orchestration)
 Purpose: Trains EEG classification models using K-fold cross-validation.
-Author:  GitHub Copilot (NASA-style guidelines)
+Author:  Bruno Rocha
 Created: 2025-05-28
 License: BSD (3-clause) # Assuming BSD, verify actual license
 Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
@@ -17,25 +17,26 @@ matplotlib.use('Agg') # Then set backend. Must be before importing pyplot.
 import matplotlib.pyplot as plt # Then import pyplot
 from torch.utils.data import DataLoader
 from src.data.data_loader import BCIDataLoader
-from .eeg_inception_erp import EEGInceptionERPModel # Changed from EEGModel
+from .eeg_inception_erp import EEGInceptionERPModel
+from .eeg_it_net import EEGITNetModel # Add this import
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import train_test_split, KFold
 import argparse # Added argparse for CLI argument parsing
 
 # Training parameters
-BATCH_SIZE = 32
+BATCH_SIZE = 10
 # NUM_EPOCHS = 50 # Will be passed as a parameter
 LEARNING_RATE = 0.001
 EARLY_STOPPING_PATIENCE = 5
 # K_FOLDS = 5 # Will be passed as a parameter
 TEST_SPLIT = 0.2  # Hold out test set before K-fold
 
-def train_epoch(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> tuple[float, float]: # Changed EEGModel to EEGInceptionERPModel
+def train_epoch(model: EEGInceptionERPModel | EEGITNetModel, dataloader: DataLoader, criterion: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> tuple[float, float]:
     """
     Performs a single training epoch for the given model.
 
     Args:
-        model (EEGInceptionERPModel): The neural network model to train. # Changed type hint
+        model (EEGInceptionERPModel | EEGITNetModel): The neural network model to train.
         dataloader (DataLoader): DataLoader providing training data batches.
         criterion (torch.nn.Module): The loss function (e.g., CrossEntropyLoss).
         optimizer (torch.optim.Optimizer): The optimization algorithm (e.g., Adam).
@@ -74,12 +75,12 @@ def train_epoch(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: 
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
-def validate(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: torch.nn.Module, device: torch.device) -> tuple[float, float]: # Changed EEGModel to EEGInceptionERPModel
+def validate(model: EEGInceptionERPModel | EEGITNetModel, dataloader: DataLoader, criterion: torch.nn.Module, device: torch.device) -> tuple[float, float]:
     """
     Validates the model on the given dataset.
 
     Args:
-        model (EEGInceptionERPModel): The neural network model to validate. # Changed type hint
+        model (EEGInceptionERPModel | EEGITNetModel): The neural network model to validate.
         dataloader (DataLoader): DataLoader providing validation data batches.
         criterion (torch.nn.Module): The loss function.
         device (torch.device): The device (CPU or CUDA) to perform validation on.
@@ -109,21 +110,23 @@ def validate(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: tor
     
     val_loss = running_loss / len(dataloader)
     val_acc = correct / total
-    return val_loss, val_acc # Added return values
+    return val_loss, val_acc
 
 def train_single_fold(
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray,
-    fold_num: int | str, # Can be int for fold number or str like "final"
+    fold_num: int | str, 
     device: torch.device,
     num_epochs: int,
     learning_rate: float,
     early_stopping_patience: int,
     batch_size: int,
     model_base_path: str,
-    model_name: str
+    model_name: str,
+    model_type: str = "EEGInceptionERP", 
+    model_params: dict | None = None
 ) -> tuple[float, dict]:
     """
     Trains and validates a model for a single fold of K-fold cross-validation or for final training.
@@ -141,6 +144,8 @@ def train_single_fold(
         batch_size (int): Number of samples per training batch.
         model_base_path (str): Base directory path where model files will be saved.
         model_name (str): Name of the model, used for creating a subdirectory within `model_base_path`.
+        model_type (str, optional): Type of model to train ("EEGInceptionERP" or "EEGITNet"). Defaults to "EEGInceptionERP".
+        model_params (dict | None, optional): Additional keyword arguments for the model constructor. Defaults to None.
 
     Returns:
         tuple[float, dict]: A tuple containing:
@@ -162,18 +167,46 @@ def train_single_fold(
     # Create model
     n_channels = X_train.shape[1]
     n_times = X_train.shape[2]
-    n_outputs = len(np.unique(y_train))  # Use n_outputs instead of n_classes
+    n_outputs = len(np.unique(y_train))
 
-    model = EEGInceptionERPModel( # Changed from EEGModel
-        n_chans=n_channels,
-        n_outputs=n_outputs,
-        n_times=n_times,
-        sfreq=125, # Assuming sfreq is fixed or obtained elsewhere if dynamic. EEGInceptionERPModel default is 250.
-                   # This should be consistent with data preprocessing. For now, using 125 as in previous EEGModel call.
-                   # The EEGInceptionERPModel will use this sfreq if provided.
-        model_name=model_name, # Pass the overall model_name for this run
-        # model_version can use default "1.0" from EEGInceptionERPModel
-    ).to(device)
+    if model_params is None:
+        model_params = {}
+
+    if model_type == "EEGInceptionERP":
+        model = EEGInceptionERPModel(
+            n_chans=n_channels,
+            n_outputs=n_outputs,
+            n_times=n_times,
+            sfreq=125, 
+            model_name=model_name,
+            **model_params
+        ).to(device)
+    elif model_type == "EEGITNet":
+        # Default parameters for EEGITNetModel, align with its current constructor
+        eegitnet_defaults = {
+            "drop_prob": 0.5,       # Default from EEGITNetModel __init__
+            "add_log_softmax": True # Default from EEGITNetModel __init__
+        }
+        # Merge provided model_params, overriding defaults
+        merged_params = {**eegitnet_defaults, **model_params}
+
+        # Filter merged_params to only include keys that are actual constructor arguments for EEGITNetModel
+        valid_constructor_args = [
+            "drop_prob", "add_log_softmax"
+        ]
+        
+        filtered_merged_params = {k: v for k, v in merged_params.items() if k in valid_constructor_args}
+
+        model = EEGITNetModel(
+            n_chans=n_channels,
+            n_outputs=n_outputs,
+            n_times=n_times,
+            sfreq=125, # Assuming sfreq is fixed or passed correctly
+            model_name=model_name,
+            **filtered_merged_params # Pass the filtered and merged parameters
+        ).to(device)
+    else:
+        raise ValueError(f"Unsupported model_type: {model_type}")
     
     # Loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
@@ -219,9 +252,9 @@ def train_single_fold(
             patience_counter = 0
             # Save best model for this fold
             model.set_trained(True) # Set trained status before saving
-            fold_model_save_path = os.path.join(model_base_path, model_name, f'eeg_inception_fold_{fold_num}.pth')
-            os.makedirs(os.path.dirname(fold_model_save_path), exist_ok=True) # Ensure directory for this specific model exists
-            model.save(fold_model_save_path) # Use model.save() method
+            fold_model_save_path = os.path.join(model_base_path, model_name, f'{model_type.lower().replace(" ", "_")}_fold_{fold_num}.pth')
+            os.makedirs(os.path.dirname(fold_model_save_path), exist_ok=True)
+            model.save(fold_model_save_path)
         else:
             patience_counter += 1
             if patience_counter >= early_stopping_patience: # Use early_stopping_patience parameter
@@ -240,15 +273,17 @@ def train_single_fold(
 
 def main(
     subjects_to_use: list[int] | str | None = None,
-    num_epochs_per_fold: int = 50,
-    num_k_folds: int = 5,
+    num_epochs_per_fold: int = 30,
+    num_k_folds: int = 10,
     learning_rate: float = 0.001,
-    early_stopping_patience: int = 5,
-    batch_size: int = 32,
+    early_stopping_patience: int = 8,
+    batch_size: int = 10,
     test_split_ratio: float = 0.2,
     data_base_path: str = "eeg_data",
     runs_to_include: list[int] | None = None,
-    model_name: str = "unnamed_model"
+    model_name: str = "unnamed_model",
+    model_type: str = "EEGInceptionERP",
+    model_params_json: str | None = None
 ) -> dict:
     """
     Main function to orchestrate the EEG model training and evaluation pipeline.
@@ -271,6 +306,10 @@ def main(
             If None, defaults to [4, 8, 12] (motor imagery runs). Defaults to None.
         model_name (str, optional): Name for the current model run. This will be used to create
             a subdirectory under "models/" for saving model files and plots. Defaults to "unnamed_model".
+        model_type (str, optional): Type of model to train ("EEGInceptionERP" or "EEGITNet").
+            Defaults to "EEGInceptionERP".
+        model_params_json (str | None, optional): JSON string containing additional keyword
+            arguments for the model constructor. Defaults to None.
 
     Returns:
         dict: A dictionary containing key training outcomes:
@@ -289,6 +328,15 @@ def main(
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    model_params = {}
+    if model_params_json:
+        try:
+            import json
+            model_params = json.loads(model_params_json)
+            print(f"Using model parameters from JSON: {model_params}")
+        except json.JSONDecodeError as e:
+            print(f"Warning: Could not parse model_params_json: {e}. Using default model parameters.")
 
     # Define the base path for saving models and plots for this run
     current_model_base_path = "models" # Base directory for all models
@@ -353,12 +401,14 @@ def main(
         # Train model for this fold
         best_val_acc, training_history = train_single_fold(
             X_train_fold, y_train_fold, X_val_fold, y_val_fold, fold, device,
-            num_epochs=num_epochs_per_fold, # Pass num_epochs_per_fold
-            learning_rate=learning_rate, # Pass learning_rate
-            early_stopping_patience=early_stopping_patience, # Pass early_stopping_patience
-            batch_size=batch_size, # Pass batch_size
-            model_base_path=current_model_base_path, # Pass the base path for models
-            model_name=model_name # Pass the specific model name
+            num_epochs=num_epochs_per_fold, 
+            learning_rate=learning_rate, 
+            early_stopping_patience=early_stopping_patience, 
+            batch_size=batch_size, 
+            model_base_path=current_model_base_path, 
+            model_name=model_name, 
+            model_type=model_type, 
+            model_params=model_params
         )
         
         fold_results.append(best_val_acc)
@@ -381,15 +431,17 @@ def main(
     print(f"\\nTraining final model on all training data ({model_name})...")
     final_best_acc, final_history = train_single_fold(
         X_train_val, y_train_val, X_test, y_test, "final", device,
-        num_epochs=num_epochs_per_fold, # Pass num_epochs_per_fold for final training as well
+        num_epochs=num_epochs_per_fold, 
         learning_rate=learning_rate,
-        early_stopping_patience=early_stopping_patience, # Can be different for final model if needed
+        early_stopping_patience=early_stopping_patience, 
         batch_size=batch_size,
-        model_base_path=current_model_base_path, # Pass the base path
-        model_name=model_name # Pass the model name
+        model_base_path=current_model_base_path, 
+        model_name=model_name, 
+        model_type=model_type, 
+        model_params=model_params
     )
     
-    print(f"\\nFinal test accuracy for {model_name}: {final_best_acc:.4f}")
+    print(f"\\nFinal test accuracy for {model_name} ({model_type}): {final_best_acc:.4f}")
     
     # Generate comprehensive plots
     print(f"\\nGenerating training plots for {model_name}...")
@@ -413,26 +465,34 @@ def main(
     
     # Subplot 2: Average learning curves across folds
     plt.subplot(2, 3, 2)
-    max_epochs = max(len(hist['val_accuracies']) for hist in all_training_histories)
-    
-    # Calculate mean and std across folds
-    val_acc_mean = []
-    val_acc_std = []
-    for epoch in range(max_epochs):
-        epoch_accs = []
-        for hist in all_training_histories:
-            if epoch < len(hist['val_accuracies']):
-                epoch_accs.append(hist['val_accuracies'][epoch])
-        if epoch_accs:
-            val_acc_mean.append(np.mean(epoch_accs))
-            val_acc_std.append(np.std(epoch_accs))
-    
-    epochs_range = range(1, len(val_acc_mean) + 1)
-    plt.plot(epochs_range, val_acc_mean, 'b-', linewidth=2, label='Mean Val Accuracy')
-    plt.fill_between(epochs_range, 
-                     np.array(val_acc_mean) - np.array(val_acc_std),
-                     np.array(val_acc_mean) + np.array(val_acc_std),
-                     alpha=0.3, color='blue')
+    if all_training_histories:
+        max_epochs = max(len(hist['val_accuracies']) for hist in all_training_histories if hist['val_accuracies']) if any(hist['val_accuracies'] for hist in all_training_histories) else 0
+        
+        val_acc_mean = []
+        val_acc_std = []
+        if max_epochs > 0: 
+            for epoch in range(max_epochs):
+                epoch_accs = []
+                for hist in all_training_histories:
+                    if epoch < len(hist['val_accuracies']):
+                        epoch_accs.append(hist['val_accuracies'][epoch])
+                if epoch_accs: 
+                    val_acc_mean.append(np.mean(epoch_accs))
+                    val_acc_std.append(np.std(epoch_accs))
+            
+            if val_acc_mean: 
+                epochs_range = range(1, len(val_acc_mean) + 1)
+                plt.plot(epochs_range, val_acc_mean, 'b-', linewidth=2, label='Mean Val Accuracy')
+                plt.fill_between(epochs_range, 
+                                 np.array(val_acc_mean) - np.array(val_acc_std),
+                                 np.array(val_acc_mean) + np.array(val_acc_std),
+                                 alpha=0.3, color='blue')
+        else: 
+            plt.text(0.5, 0.5, "No data for learning curves", horizontalalignment='center', verticalalignment='center')
+
+    else: 
+        plt.text(0.5, 0.5, "No training history available", horizontalalignment='center', verticalalignment='center')
+
     plt.xlabel('Epoch')
     plt.ylabel('Validation Accuracy')
     plt.title('Average Learning Curve Across Folds')
@@ -474,7 +534,9 @@ def main(
     # Subplot 6: Summary statistics
     plt.subplot(2, 3, 6)
     plt.axis('off')
+    # Add model_type to summary text
     summary_text = f"""
+    Model Type: {model_type}
     K-Fold Cross-Validation Summary
     
     Number of Folds: {num_k_folds} 
@@ -508,8 +570,34 @@ if __name__ == '__main__':
     # Example usage for CLI, can be expanded with argparse
     # This part is more for direct script execution testing, CLI will call main() differently
     parser = argparse.ArgumentParser(description="Train EEG Model with K-Fold CV.")
-    parser.add_argument("--model_name", type=str, default="cli_default_model", help="Name for the model and its output folder.")
-    # Add other arguments as needed (subjects, epochs, etc.)
+    parser.add_argument('--subjects', type=int, nargs='+', default=None, help='List of subject IDs to use for training (e.g., 1 2 3).')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs per fold.')
+    parser.add_argument('--k_folds', type=int, default=5, help='Number of folds for cross-validation.')
+    parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for the optimizer.')
+    parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
+    parser.add_argument('--batch_size', type=int, default=10, help='Batch size for training.')
+    parser.add_argument('--test_split', type=float, default=0.2, help='Test split ratio for hold-out test set.')
+    parser.add_argument('--data_path', type=str, default='eeg_data', help='Path to the EEG data directory.')
+    parser.add_argument('--runs', type=int, nargs='+', default=None, help='List of runs to include (e.g., 4 8 12). Defaults to motor imagery runs.')
+    parser.add_argument('--model_name', type=str, default="unnamed_bci_model", help='Name for the model run, used for saving outputs.')
+    parser.add_argument('--model_type', type=str, default="EEGInceptionERP", choices=["EEGInceptionERP", "EEGITNet"], help='Type of model to train.')
+    parser.add_argument('--model_params_json', type=str, default=None, help='JSON string of additional model parameters.')
+
     args = parser.parse_args()
 
-    main(model_name=args.model_name) # Pass the model_name
+    results = main(
+        subjects_to_use=args.subjects,
+        num_epochs_per_fold=args.epochs,
+        num_k_folds=args.k_folds,
+        learning_rate=args.lr,
+        early_stopping_patience=args.patience,
+        batch_size=args.batch_size,
+        test_split_ratio=args.test_split,
+        data_base_path=args.data_path,
+        runs_to_include=args.runs,
+        model_name=args.model_name,
+        model_type=args.model_type, 
+        model_params_json=args.model_params_json
+    )
+    print("\\nTraining Run Summary:")
+    print(results)

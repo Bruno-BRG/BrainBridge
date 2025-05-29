@@ -1,12 +1,27 @@
+"""
+File:    pylsl_tab.py
+Class:   PylslTab
+Purpose: Provides the user interface tab for discovering, connecting to,
+         visualizing, and recording EEG data streams using the Lab Streaming
+         Layer (LSL) library. It allows users to refresh available LSL streams,
+         start/stop a selected stream, view real-time data plots, and
+         record/save the EEG data.
+Author:  Bruno Rocha
+Created: 2025-05-28
+Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
+         Requires PyLSL to be installed. If PyLSL is not available,
+         the tab will display an error message.
+         Optionally integrates with a StreamingWidget if available.
+"""
+
 import os
 import sys
 import numpy as np
-import time
 import traceback
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QLabel, QPushButton, QTextEdit, QHBoxLayout, QMessageBox, QFileDialog
 )
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer
 from collections import deque
 from datetime import datetime
 
@@ -36,7 +51,21 @@ except ImportError:
         StreamingWidget = None
 
 class PylslTab(QWidget):
+    """
+    Manages the Pylsl Tab in the main GUI application.
+
+    This class is responsible for setting up the UI elements related to LSL stream
+    interaction, handling user actions (e.g., start/stop stream, record data),
+    and managing the LSL data inlet and plotting timer.
+    """
     def __init__(self, parent_main_window):
+        """
+        Initializes the PylslTab.
+
+        Args:
+            parent_main_window (QMainWindow): Reference to the main application window.
+                                              Used for accessing shared resources or configurations if necessary.
+        """
         super().__init__()
         self.main_window = parent_main_window # Reference to MainWindow if needed, though try to minimize direct access
 
@@ -71,6 +100,17 @@ class PylslTab(QWidget):
         self.setLayout(layout)
 
     def _setup_manual_pylsl_ui(self, layout):
+        """
+        Sets up the UI elements for manual PyLSL interaction.
+
+        This method is called if the StreamingWidget is not available or fails to load.
+        It creates QGroupBoxes for stream connection, visualization, and recording,
+        populating them with buttons, labels, and a plot canvas.
+
+        Args:
+            layout (QVBoxLayout): The main QVBoxLayout of the PylslTab to which
+                                  UI elements will be added.
+        """
         # Stream connection group
         connection_group = QGroupBox("Stream Connection")
         connection_layout = QVBoxLayout()
@@ -164,6 +204,13 @@ class PylslTab(QWidget):
         self.refresh_pylsl_streams() # Auto-refresh streams on load
 
     def refresh_pylsl_streams(self):
+        """
+        Refreshes the list of available LSL streams.
+
+        Queries for LSL streams (specifically EEG type) and updates the
+        information text area with the names, channel counts, and sample rates
+        of found streams. Enables the start button if EEG streams are found.
+        """
         if not PYLSL_AVAILABLE:
             return
         try:
@@ -181,6 +228,13 @@ class PylslTab(QWidget):
             self.pylsl_start_btn.setEnabled(False)
 
     def start_pylsl_stream(self):
+        """
+        Starts an LSL EEG stream.
+
+        Resolves available EEG streams, connects to the first one found,
+        initializes the data buffer and plotting timer, and updates UI elements
+        to reflect the connected state. Displays messages for success or failure.
+        """
         if not PYLSL_AVAILABLE:
             QMessageBox.warning(self, "PyLSL Not Available", "PyLSL is not installed. Please install it with: pip install pylsl")
             return
@@ -217,6 +271,13 @@ class PylslTab(QWidget):
             QMessageBox.critical(self, "Stream Error", f"Failed to start stream: {str(e)}\n{traceback.format_exc()}")
 
     def stop_pylsl_stream(self):
+        """
+        Stops the currently active LSL stream.
+
+        Closes the LSL inlet, stops the plotting timer, clears the plot and
+        data buffers, and updates UI elements to reflect the disconnected state.
+        Also stops any active recording.
+        """
         try:
             self.pylsl_timer.stop()
             if self.pylsl_inlet:
@@ -240,6 +301,14 @@ class PylslTab(QWidget):
             QMessageBox.critical(self, "Stop Error", f"Error stopping stream: {str(e)}\n{traceback.format_exc()}")
 
     def update_pylsl_plot(self):
+        """
+        Pulls new data from the LSL stream and updates the plot.
+
+        This method is connected to the `pylsl_timer`. It pulls a chunk of
+        samples from the LSL inlet, appends them to the data buffer, adds them
+        to the recording data if recording is active, and calls
+        `_update_simple_plot` to refresh the visualization.
+        """
         if not self.pylsl_inlet or self.pylsl_buffer is None:
             return
         try:
@@ -256,6 +325,12 @@ class PylslTab(QWidget):
             # traceback.print_exc() # Can be noisy, enable if needed
 
     def _update_simple_plot(self):
+        """
+        Updates the EEG data plot with the current buffer content.
+
+        Clears the previous plot and redraws the EEG channels. Data is scaled
+        and offset for display. Limits the number of displayed channels for clarity.
+        """
         if not self.pylsl_buffer or len(self.pylsl_buffer) == 0:
             self.pylsl_plot_canvas.clear_plot()
             return
@@ -297,6 +372,12 @@ class PylslTab(QWidget):
             # traceback.print_exc()
 
     def start_pylsl_recording(self):
+        """
+        Starts recording data from the LSL stream.
+
+        Initializes the recording data list, sets the recording flag to True,
+        and updates UI elements to reflect the recording state.
+        """
         self.pylsl_recording_data = []
         self.pylsl_is_recording = True
         self.pylsl_recording_status.setText("Recording: Active")
@@ -307,6 +388,16 @@ class PylslTab(QWidget):
         QMessageBox.information(self, "Recording Started", "EEG data recording started")
 
     def stop_pylsl_recording(self, show_message=True):
+        """
+        Stops the current LSL data recording.
+
+        Sets the recording flag to False and updates UI elements. Displays a
+        message with the number of samples recorded.
+
+        Args:
+            show_message (bool, optional): Whether to display a confirmation
+                                           QMessageBox. Defaults to True.
+        """
         self.pylsl_is_recording = False
         samples_recorded = len(self.pylsl_recording_data)
         self.pylsl_recording_status.setText(f"Recording: Stopped ({samples_recorded} samples)")
@@ -318,6 +409,14 @@ class PylslTab(QWidget):
             QMessageBox.information(self, "Recording Stopped", f"Recording stopped. {samples_recorded} samples recorded.")
 
     def save_pylsl_data(self):
+        """
+        Saves the recorded LSL data to a file.
+
+        Prompts the user for a file location and name. Saves data in CSV or NPY
+        format. For CSV, it attempts to use pandas for a more structured output;
+        if pandas is not available, it falls back to a simpler numpy save or
+        warns the user.
+        """
         if not self.pylsl_recording_data:
             QMessageBox.warning(self, "No Data", "No recorded data to save")
             return
@@ -373,7 +472,13 @@ class PylslTab(QWidget):
             QMessageBox.critical(self, "Save Error", f"Failed to save data: {str(e)}\n{traceback.format_exc()}")
 
     def clear_resources(self):
-        """Clean up resources like timers and inlets when the tab or window is closed."""
+        """
+        Cleans up resources like timers and LSL inlets.
+
+        This method should be called when the tab or application is closing
+        to ensure that the LSL stream is properly closed and the timer is stopped,
+        preventing potential issues or resource leaks.
+        """
         print("PylslTab: Clearing resources...")
         try:
             self.pylsl_timer.stop()
@@ -386,5 +491,13 @@ class PylslTab(QWidget):
     # It's good practice to ensure resources are cleaned up.
     # This might be called from MainWindow's closeEvent or when the tab is removed.
     def closeEvent(self, event):
+        """
+        Handles the close event for the widget.
+
+        Ensures that `clear_resources` is called before the widget is closed.
+
+        Args:
+            event (QCloseEvent): The close event.
+        """
         self.clear_resources()
         super().closeEvent(event) # Important to call the parent's closeEvent

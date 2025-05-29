@@ -1,7 +1,7 @@
 """
 Class:   EEGInceptionERPModel
 Purpose: Implements the EEGInceptionERP classification model, inheriting from BaseModel.
-Author:  GitHub Copilot (NASA-style guidelines)
+Author:  Bruno Rocha
 Created: 2025-05-28
 License: BSD (3-clause) # Verify actual license
 Notes:   Follows Task Management & Coding Guide for Copilot v2.0.

@@ -1,9 +1,18 @@
+"""
+    Class:   BCICommandLineInterface
+    Purpose: Provides a command-line interface for BCI model training, data management, and application interaction.
+    Author:  Copilot (NASA-style guidelines)
+    Created: 2025-05-28
+    Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
+    """
+
 import sys
 import os
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split, KFold
+import json # Added for model_params_json
 
 # Add project root to Python path to allow importing from src
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -26,6 +35,8 @@ loaded_data_cache = {
     "data_path": "eeg_data", # Store data path for reuse
     "subjects_list": None # Store subject list for reuse
 }
+
+MODEL_TYPES = ["EEGInceptionERP", "EEGITNet"] # Define available model types
 
 def get_int_input(prompt, default_value):
     while True:
@@ -132,6 +143,8 @@ def handle_model_training_cli():
     global loaded_data_cache
 
     default_model_name = "cli_trained_model"
+    default_model_type = MODEL_TYPES[0] # Default to the first model type
+    default_model_params_json = "{}"
     default_num_epochs = 50
     default_k_folds = 5
     default_lr = 0.001
@@ -152,6 +165,8 @@ def handle_model_training_cli():
                 continue
 
             model_name_input = default_model_name
+            model_type_input = default_model_type
+            model_params_json_input = default_model_params_json
             num_epochs = default_num_epochs
             k_folds = default_k_folds
             lr = default_lr
@@ -163,6 +178,24 @@ def handle_model_training_cli():
             if choice == '1': # Custom parameters
                 print("\n--- Custom Training Parameters ---")
                 model_name_input = input(f"Enter model name (default: {default_model_name}): ") or default_model_name
+                
+                # Model Type Selection
+                print(f"Available model types: {', '.join(MODEL_TYPES)}")
+                model_type_input_str = input(f"Enter model type (default: {default_model_type}): ") or default_model_type
+                if model_type_input_str not in MODEL_TYPES:
+                    print(f"Invalid model type \'{model_type_input_str}\'. Defaulting to {default_model_type}.")
+                    model_type_input = default_model_type
+                else:
+                    model_type_input = model_type_input_str
+
+                # Model Parameters JSON
+                model_params_json_input = input(f"Enter model parameters as JSON string (default: {default_model_params_json}): ") or default_model_params_json
+                try:
+                    json.loads(model_params_json_input) # Validate JSON
+                except json.JSONDecodeError:
+                    print(f"Invalid JSON string for model parameters. Defaulting to {default_model_params_json}.")
+                    model_params_json_input = default_model_params_json
+
                 num_epochs = get_int_input("Number of epochs per fold", default_num_epochs)
                 k_folds = get_int_input("Number of K-folds", default_k_folds)
                 lr = get_float_input("Learning rate", default_lr)
@@ -173,7 +206,9 @@ def handle_model_training_cli():
             else: # Default parameters
                 print("\n--- Using Default Training Parameters ---")
                 model_name_input = default_model_name # Ensure default name is used if not custom
-            
+                model_type_input = default_model_type # Use default model type
+                model_params_json_input = default_model_params_json # Use default model params
+
             subjects_to_use_for_training = None
             if subjects_for_training_str.lower() != 'all':
                 try:
@@ -184,10 +219,12 @@ def handle_model_training_cli():
             else:
                 subjects_to_use_for_training = loaded_data_cache.get("subjects_list", None) # Use all loaded subjects if 'all'
 
-            print(f"\nStarting training for model: {model_name_input}...")
+            print(f"\nStarting training for model: {model_name_input}, type: {model_type_input}...")
             try:
                 results = train_main_script(
-                    subjects_to_use=subjects_to_use_for_training, 
+                    subjects_to_use=subjects_to_use_for_training,
+                    model_type=model_type_input, # Pass model_type
+                    model_params_json=model_params_json_input, # Pass model_params_json
                     num_epochs_per_fold=num_epochs,
                     num_k_folds=k_folds,
                     learning_rate=lr,

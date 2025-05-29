@@ -1,3 +1,12 @@
+"""
+Class:   DataManagementTab
+Purpose: Provides the UI tab for managing EEG data, including loading, viewing, and navigating through data samples.
+Author:  Copilot (NASA-style guidelines)
+Created: 2025-05-28
+Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
+         Integrates with BCIDataLoader and PlotCanvas for data handling and visualization.
+"""
+
 import sys
 import os
 import traceback

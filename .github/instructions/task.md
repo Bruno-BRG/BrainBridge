@@ -18,6 +18,7 @@
   - [x] refactor-gui-training-tab-oop – _Refactor Model Training tab into its own class._
   - [x] refactor-gui-pylsl-tab-oop – _Refactor OpenBCI Live (PyLSL) tab into its own class._
   - [x] refactor-training-thread-oop – _Move TrainingThread class to its own file._
+  - [x] implement-model-selection-gui – _Allow model selection (EEGInceptionERP, EEGITNet) in the GUI training tab._
   - [ ] gui-training-subject-input – _Allow user to specify subject IDs for training, defaulting to loaded subjects or a predefined set._
   - [ ] gui-training-start-action – _Implement button to start the model training process._
   - [ ] gui-training-progress-display – _Display training progress and results in the GUI (e.g., logs, metrics, plots)._
@@ -26,8 +27,11 @@
   - [x] refactor-model-create-base-class – _Create an abstract BaseModel class with a defined interface (save, load, forward, device, etc.)._
   - [x] refactor-eegmodel-to-use-basemodel – _Refactor EEGInceptionERPModel to inherit from BaseModel and implement its interface._
   - [x] refactor-train-model-script – _Update train_model.py to use the refactored EEGInceptionERPModel (inheriting from BaseModel)._
-  - [ ] refactor-model-documentation – _Ensure all model classes have NASA-grade docstrings and input validation._
-  - [ ] refactor-model-file-structure – _Ensure each model class resides in its own file._
+  - [x] create-eegitnet-model-class – _Create EEGITNetModel class inheriting from BaseModel, with NASA-grade docs & validation._
+  - [x] integrate-eegitnet-model-training – _Integrate EEGITNetModel into train_model.py for training and evaluation._
+  - [x] implement-model-selection-cli – _Allow model selection (EEGInceptionERP, EEGITNet) and parameter passing in the CLI._
+  - [ ] refactor-model-documentation – _Ensure all model classes have NASA-grade docstrings and input validation (BaseModel, EEGInceptionERPModel)._
+  - [x] refactor-model-file-structure – _Ensure each model class resides in its own file._
 
 ## Review / Testing
 

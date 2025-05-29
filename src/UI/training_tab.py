@@ -1,9 +1,21 @@
+"""
+Classes: TrainingThread, TrainingTab
+Purpose: Provides the UI tab for configuring and running model training sessions.
+         TrainingThread handles the training process in a separate thread to keep the UI responsive.
+Author:  Copilot (NASA-style guidelines)
+Created: 2025-05-28
+Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
+         Integrates with the train_model script for backend training logic.
+"""
+
 import os
 import sys
+import traceback 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QGroupBox,
     QLabel, QLineEdit, QRadioButton, QSpinBox,
-    QDoubleSpinBox, QPushButton, QTextEdit, QMessageBox
+    QDoubleSpinBox, QPushButton, QTextEdit, QMessageBox,
+    QComboBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -19,15 +31,16 @@ class TrainingThread(QThread):
     training_error = pyqtSignal(str)
     log_message = pyqtSignal(str)
 
-    def __init__(self, training_params, data_cache, model_name):
+    def __init__(self, training_params, data_cache, model_name, model_type): # Add model_type
         super().__init__()
         self.training_params = training_params
         self.data_cache = data_cache
         self.model_name = model_name
+        self.model_type = model_type # Store model_type
 
     def run(self):
         try:
-            self.log_message.emit(f"Starting training for model: {self.model_name}...")
+            self.log_message.emit(f"Starting training for model: {self.model_name} (Type: {self.model_type})...")
             
             subjects_to_use_str = self.training_params.get("train_subject_ids", "all")
             subjects_to_use = None
@@ -56,7 +69,8 @@ class TrainingThread(QThread):
                 batch_size=self.training_params["batch_size"],
                 test_split_ratio=self.training_params["test_split_size"],
                 data_base_path=self.data_cache["data_path"],
-                model_name=self.model_name
+                model_name=self.model_name,
+                model_type=self.model_type # Pass model_type
             )
             
             sys.stdout = original_stdout
@@ -90,6 +104,16 @@ class TrainingTab(QWidget):
         self.model_name_input.setPlaceholderText("Enter a name for your model")
         self.model_name_input.textChanged.connect(self.update_model_name_config)
         model_naming_layout.addRow(QLabel("Model Name:"), self.model_name_input)
+
+        # Model Type Selection
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItems(["EEGInceptionERP", "EEGITNet"])
+        # Set initial value based on config or default
+        current_model_type = self.main_window.training_params_config.get("model_type", "EEGInceptionERP")
+        self.model_type_combo.setCurrentText(current_model_type)
+        self.model_type_combo.currentTextChanged.connect(self.update_model_type_config)
+        model_naming_layout.addRow(QLabel("Model Type:"), self.model_type_combo)
+
         model_naming_group.setLayout(model_naming_layout)
         layout.addWidget(model_naming_group)
 
@@ -191,6 +215,9 @@ class TrainingTab(QWidget):
         self.main_window.training_params_config["model_name"] = text
         self.main_window.current_model_name = text # Also update MainWindow's current_model_name
 
+    def update_model_type_config(self, text):
+        self.main_window.training_params_config["model_type"] = text
+
     def toggle_custom_params_group(self):
         use_custom = self.rb_custom_params.isChecked()
         self.custom_params_group.setEnabled(use_custom)
@@ -236,12 +263,13 @@ class TrainingTab(QWidget):
             model_name = "unnamed_model"
             self.model_name_input.setText(model_name) # Update UI if empty
         self.main_window.current_model_name = model_name # Update main window's model name
+        current_model_type = self.model_type_combo.currentText() # Get selected model type
 
         self.training_log_display.clear()
-        self.training_log_display.append(f"Preparing to train model: {model_name}")
+        self.training_log_display.append(f"Preparing to train model: {model_name} (Type: {current_model_type})")
         self.training_log_display.append(f"Parameters: {current_params}")
 
-        self.training_thread = TrainingThread(current_params, self.main_window.data_cache, model_name)
+        self.training_thread = TrainingThread(current_params, self.main_window.data_cache, model_name, current_model_type) # Pass model_type
         self.training_thread.log_message.connect(self.append_log_message)
         self.training_thread.training_finished.connect(self.on_training_finished)
         self.training_thread.training_error.connect(self.on_training_error)
