@@ -6,18 +6,17 @@ Author:  Copilot (NASA-style guidelines)
 Created: 2025-05-28
 Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
 """
-
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtWidgets import QWidget, QMessageBox # QWidget is a common base, though not strictly necessary for FigureCanvas if only used as a canvas
+from PyQt5.QtWidgets import QWidget, QMessageBox
 
 class PlotCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = fig.add_subplot(111)
         super().__init__(fig)
-        if parent: # Ensure parent is set if provided
+        if parent:
             self.setParent(parent)
 
     def plot(self, data, title=""):
@@ -40,19 +39,21 @@ class PlotCanvas(FigureCanvas):
     def plot_and_save(self, data_to_plot: np.ndarray, filename: str, title: str):
         """Plots the given data with a title and saves it to a file."""
         # Plot the new data
-        self.plot(data_to_plot, title=title) # This method already calls self.draw()
+        self.plot(data_to_plot, title=title)
 
         try:
             self.figure.savefig(filename)
             parent_widget = self.parentWidget()
-            if not parent_widget: parent_widget = self # Fallback
+            if not parent_widget:
+                parent_widget = self
             QMessageBox.information(parent_widget, "Plot Saved", f"Plot saved as {filename}")
         except Exception as e:
             parent_widget = self.parentWidget()
-            if not parent_widget: parent_widget = self
+            if not parent_widget:
+                parent_widget = self
             QMessageBox.critical(parent_widget, "Save Error", f"Could not save plot: {str(e)}")
 
-class TrainingPlotCanvas(FigureCanvas): # Also moving TrainingPlotCanvas here as it\'s a canvas
+class TrainingPlotCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = fig.add_subplot(111)
@@ -64,7 +65,7 @@ class TrainingPlotCanvas(FigureCanvas): # Also moving TrainingPlotCanvas here as
         self.axes.clear()
         timepoints_to_plot = min(data_window.shape[1], num_points)
         
-        for i in range(data_window.shape[0]): # Iterate over channels
+        for i in range(data_window.shape[0]):
             self.axes.plot(data_window[i, :timepoints_to_plot], label=f'Ch {i+1}')
         
         self.axes.set_title(title)

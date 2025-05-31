@@ -25,7 +25,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from src.data.data_loader import BCIDataLoader
-from src.UI.plot_canvas import PlotCanvas # Import PlotCanvas
+from .plot_canvas import PlotCanvas # Import PlotCanvas
 
 class DataManagementTab(QWidget):
     def __init__(self, parent_main_window):
