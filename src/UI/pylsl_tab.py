@@ -287,13 +287,23 @@ class PylslTab(QWidget):
             
         try:
             current_time = datetime.datetime.now()
-            
             for sample in samples:
                 row = [self.sample_index]
                 
-                # Add EXG channel data
+                # Add EXG channel data with proper formatting
                 for value in sample:
-                    row.append(value)
+                    # Format to match OpenBCI precision (max 4 decimal places, remove trailing zeros)
+                    if isinstance(value, (int, float)):
+                        # Round to 4 decimal places and remove trailing zeros
+                        formatted_value = f"{value:.4f}".rstrip('0').rstrip('.')
+                        # Convert back to float if it's just a number, otherwise keep as string
+                        try:
+                            formatted_value = float(formatted_value) if '.' in formatted_value else int(formatted_value)
+                        except ValueError:
+                            formatted_value = 0
+                    else:
+                        formatted_value = value
+                    row.append(formatted_value)
                 
                 # Add placeholder data for other columns to match OpenBCI format
                 num_eeg_channels = len(sample)
@@ -306,10 +316,15 @@ class PylslTab(QWidget):
                 
                 # Analog channels (3)
                 row.extend([0, 0, 0])
-                
-                # Timestamp (relative to recording start in seconds)
+                  # Timestamp (relative to recording start in seconds)
                 elapsed_seconds = (current_time - self.recording_start_time).total_seconds()
-                row.append(elapsed_seconds)
+                # Format timestamp to match OpenBCI precision
+                formatted_timestamp = f"{elapsed_seconds:.4f}".rstrip('0').rstrip('.')
+                try:
+                    formatted_timestamp = float(formatted_timestamp) if '.' in formatted_timestamp else int(formatted_timestamp)
+                except ValueError:
+                    formatted_timestamp = 0
+                row.append(formatted_timestamp)
                 
                 # Other
                 row.append(0)
