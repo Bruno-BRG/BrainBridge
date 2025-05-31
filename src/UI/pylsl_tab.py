@@ -112,7 +112,7 @@ class PylslTab(QWidget):
         # Real-time visualization group
         visualization_group = QGroupBox("Real-time EEG Visualization")
         visualization_layout = QVBoxLayout()
-        self.pylsl_plot_canvas = PlotCanvas(self, width=10, height=12, dpi=80) # Adjusted height
+        self.pylsl_plot_canvas = PlotCanvas(self, width=10, height=12, dpi=80)
         visualization_layout.addWidget(self.pylsl_plot_canvas)
         
         viz_controls_layout = QHBoxLayout()
@@ -124,6 +124,14 @@ class PylslTab(QWidget):
         viz_controls_layout.addWidget(self.pylsl_sample_rate)
         viz_controls_layout.addWidget(self.pylsl_buffer_size)
         visualization_layout.addLayout(viz_controls_layout)
+
+        # Recording controls
+        recording_controls_layout = QHBoxLayout()
+        self.record_button = QPushButton("Record: Left")
+        # self.record_button.setCheckable(True) # Making it a toggle for state
+        self.record_button.clicked.connect(self.handle_record_button_click) # Connect to a new handler
+        recording_controls_layout.addWidget(self.record_button)
+        visualization_layout.addLayout(recording_controls_layout)
         
         visualization_group.setLayout(visualization_layout)
         layout.addWidget(visualization_group)
@@ -131,12 +139,13 @@ class PylslTab(QWidget):
         layout.addStretch()
 
         # Initialize PyLSL variables
-        self.pylsl_inlet: Optional['StreamInlet'] = None
+        self.pylsl_inlet: Optional[StreamInlet] = None # Corrected type hint
         self.pylsl_buffer: Optional[deque] = None
         self.pylsl_time_buffer: Optional[deque] = None # For timestamped data if needed by plot
         self.pylsl_timer = QTimer(self)
         self.pylsl_timer.timeout.connect(self.update_pylsl_plot)
         self.current_sample_rate = 125  # Default sample rate, updated on stream connection
+        self.current_record_label = "Left" # Initial recording label
         
         # Connect signals
         self.pylsl_start_btn.clicked.connect(self.start_pylsl_stream)
@@ -144,6 +153,45 @@ class PylslTab(QWidget):
         self.pylsl_refresh_btn.clicked.connect(self.refresh_pylsl_streams)
         
         self.refresh_pylsl_streams() # Auto-refresh streams on load
+
+    def handle_record_button_click(self):
+        # First, record the data with the current label
+        self.record_current_window()
+        # Then, toggle the label for the next click
+        if self.current_record_label == "Left":
+            self.current_record_label = "Right"
+            self.record_button.setText("Record: Right")
+        else:
+            self.current_record_label = "Left"
+            self.record_button.setText("Record: Left")
+
+    def record_current_window(self):
+        if not self.pylsl_buffer or len(self.pylsl_buffer) < 400:
+            QMessageBox.warning(self, "Buffer Too Small", 
+                                f"Need at least 400 samples in the buffer to record. Currently: {len(self.pylsl_buffer) if self.pylsl_buffer else 0}")
+            return
+
+        try:
+            current_buffer_list = list(self.pylsl_buffer) # Buffer already has maxlen=400
+            plot_data_samples_channels = np.array(current_buffer_list)
+            plot_data_channels_samples = plot_data_samples_channels.T
+
+            if plot_data_channels_samples.size == 0:
+                QMessageBox.warning(self, "No Data", "Cannot record empty data.")
+                return
+
+            plots_dir = os.path.join(project_root, "recorded_plots")
+            os.makedirs(plots_dir, exist_ok=True)
+
+            import datetime
+            timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = os.path.join(plots_dir, f"eeg_record_{self.current_record_label.lower()}_{timestamp_str}.png")
+            title = f"EEG Recording: {self.current_record_label} ({plot_data_channels_samples.shape[1]} samples)"
+
+            self.pylsl_plot_canvas.plot_and_save(plot_data_channels_samples, filename, title)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Recording Error", f"Failed to record data: {str(e)}\n{traceback.format_exc()}")
 
     def refresh_pylsl_streams(self):
         """
