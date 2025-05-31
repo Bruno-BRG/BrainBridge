@@ -238,12 +238,11 @@ class PylslTab(QWidget):
             
             self.csv_file = open(csv_filename, 'w', newline='')
             self.csv_writer = csv.writer(self.csv_file)
-            
-            # Write OpenBCI-style headers
-            self.csv_file.write("%OpenBCI Raw EXG Data\\n")
-            self.csv_file.write(f"%Number of channels = {num_channels}\\n")
-            self.csv_file.write(f"%Sample Rate = {self.current_sample_rate} Hz\\n")
-            self.csv_file.write("%Board = LSL_Stream\\n")
+              # Write OpenBCI-style headers
+            self.csv_file.write("%OpenBCI Raw EXG Data\n")
+            self.csv_file.write(f"%Number of channels = {num_channels}\n")
+            self.csv_file.write(f"%Sample Rate = {int(self.current_sample_rate)} Hz\n")
+            self.csv_file.write("%Board = OpenBCI_GUI$BoardCytonSerialDaisy\n")
             
             # Write column headers
             headers = ["Sample Index"]
