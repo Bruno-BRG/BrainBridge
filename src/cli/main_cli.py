@@ -179,15 +179,6 @@ def handle_model_training_cli():
                 print("\n--- Custom Training Parameters ---")
                 model_name_input = input(f"Enter model name (default: {default_model_name}): ") or default_model_name
                 
-                # Model Type Selection
-                print(f"Available model types: {', '.join(MODEL_TYPES)}")
-                model_type_input_str = input(f"Enter model type (default: {default_model_type}): ") or default_model_type
-                if model_type_input_str not in MODEL_TYPES:
-                    print(f"Invalid model type \'{model_type_input_str}\'. Defaulting to {default_model_type}.")
-                    model_type_input = default_model_type
-                else:
-                    model_type_input = model_type_input_str
-
                 # Model Parameters JSON
                 model_params_json_input = input(f"Enter model parameters as JSON string (default: {default_model_params_json}): ") or default_model_params_json
                 try:
