@@ -187,7 +187,7 @@ class BCIDataLoader:
     def create_windows(self, 
                       eeg_data: np.ndarray, 
                       events: List[Tuple[int, str]],
-                      window_length: float = 4.0,
+                      window_length: float = 3.2,  # Changed from 4.0 to 3.2 for 400 samples at 125Hz
                       baseline_length: float = 1.0,
                       overlap: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -196,7 +196,7 @@ class BCIDataLoader:
         Args:
             eeg_data: Preprocessed EEG data of shape (n_samples, n_channels)
             events: List of (sample_index, event_label) tuples
-            window_length: Length of each window in seconds
+            window_length: Length of each window in seconds (default: 3.2s for 400 samples at 125Hz)
             baseline_length: Baseline period before event onset in seconds  
             overlap: Overlap between windows (0.0 = no overlap, 0.5 = 50% overlap)
             
