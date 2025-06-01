@@ -1,82 +1,246 @@
-# 🧠 Sistema de Interface Cérebro-Computador (BCI) para Reabilitação Pós-AVC
+# EEG Motor Imagery Classification Project
 
-Este projeto implementa um sistema BCI completo para auxiliar na reabilitação de pacientes pós-AVC, utilizando sinais EEG do OpenBCI.
+This project implements a complete pipeline for EEG motor imagery classification using the EEGInceptionERP model from braindecode. The system can classify left vs right hand motor imagery from EEG signals.
 
-## ✨ Características Principais
+## 🎯 Project Overview
 
-- Interface gráfica PyQt5 para visualização e controle em tempo real
-- Suporte para 16 canais EEG específicos do OpenBCI
-- Pipeline de treinamento otimizado com PyTorch Lightning
-- Interoperabilidade entre formatos CSV do OpenBCI e EDF
-- Sistema de calibração personalizada por paciente
-- Visualização em tempo real dos sinais EEG
-- Classificação de movimento imaginado (esquerda/direita)
+- **Objective**: Classify motor imagery tasks (left vs right hand) from EEG signals
+- **Dataset**: PhysioNet Motor Movement/Imagery Dataset (runs 4, 8, 12)
+- **Model**: EEGInceptionERP - A state-of-the-art CNN architecture for EEG classification
+- **Framework**: PyTorch with custom data loading and preprocessing
 
-## 🔧 Configuração dos Canais EEG
+## 📁 Project Structure
 
-O sistema utiliza os seguintes 16 canais EEG:
+```
+projetoBCI/
+├── src/
+│   ├── data/
+│   │   ├── __init__.py
+│   │   └── data_loader.py          # EEG data loading and preprocessing
+│   └── model/
+│       ├── __init__.py
+│       └── eeg_inception_erp.py    # EEGInceptionERP model implementation
+├── eeg_data/                       # EEG dataset directory
+├── plots/                          # Training plots and visualizations
+├── requirements.txt                # Python dependencies
+├── train_model.py                  # Full training script with K-fold CV
+├── minimal_train.py               # Simple training example
+├── evaluate_model.py              # Model evaluation and inference
+├── simple_test.py                 # Basic functionality test
+└── README.md                      # This file
+```
+
+## 🚀 Quick Start
+
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Prepare Data
+
+Place your EEG data in the following structure:
+```
+eeg_data/
+└── MNE-eegbci-data/
+    └── files/
+        └── eegmmidb/
+            └── 1.0.0/
+                ├── S001/
+                │   ├── S001R04_csv_openbci.csv
+                │   ├── S001R08_csv_openbci.csv
+                │   └── S001R12_csv_openbci.csv
+                ├── S002/
+                └── ...
+```
+
+### 3. Test the Setup
+
+```bash
+python simple_test.py
+```
+
+### 4. Train the Model
+
+For a quick test with synthetic data:
+```bash
+python minimal_train.py
+```
+
+For full training with real EEG data:
+```bash
+python train_model.py
+```
+
+### 5. Evaluate the Model
+
+```bash
+python evaluate_model.py
+```
+
+## 🔧 Key Components
+
+### Data Loader (`src/data/data_loader.py`)
+
+- **BCIDataLoader**: Main class for loading EEG data from CSV files
+- **BCIDataset**: PyTorch dataset class with data augmentation
+- Features:
+  - Bandpass filtering (0.5-50 Hz)
+  - Notch filtering (50 Hz power line noise)
+  - Z-score standardization
+  - Windowing with configurable overlap
+  - Event extraction from annotations
+
+### Model (`src/model/eeg_inception_erp.py`)
+
+- **EEGInceptionERP**: Implementation based on braindecode
+- Features:
+  - Multi-scale inception blocks
+  - Depthwise separable convolutions
+  - Batch normalization and dropout
+  - Configurable architecture parameters
+
+### Training Pipeline
+
+- **K-fold Cross-Validation**: 5-fold cross-validation for robust performance evaluation
+- **EEGTrainer**: Complete training class with:
+  - Early stopping
+  - Learning rate scheduling
+  - Training history tracking
+  - Model checkpointing
+  - Cross-validation statistics
+
+## 📊 Model Architecture
+
+The EEGInceptionERP model uses:
+- **Input**: Multi-channel EEG signals (16 channels × time points)
+- **Inception blocks**: Multiple temporal scales (0.5s, 0.25s, 0.125s)
+- **Depthwise convolutions**: Spatial filtering
+- **Classification head**: Binary classification (left vs right hand)
+
+## 🎯 Performance
+
+The model achieves:
+- Fast training convergence (typically <20 epochs)
+- Good generalization with proper regularization
+- Real-time inference capability
+
+## 📈 Usage Examples
+
+### Loading Data
 ```python
-canais = ['C3','C4','Fp1','Fp2','F7','F3','F4','F8',
-          'T7','T8','P7','P3','P4','P8','O1','O2']
+from src.data.data_loader import BCIDataLoader
+
+loader = BCIDataLoader(
+    data_path="eeg_data",
+    subjects=[1, 2, 3],
+    runs=[4, 8, 12]
+)
+
+windows, labels, _ = loader.load_all_subjects()
 ```
 
-## 📊 Estrutura do Projeto
+### Creating Model
+```python
+from src.model.eeg_inception_erp import EEGInceptionERP
 
-```
-src/
-├── model/              # Implementações dos modelos e processamento
-│   ├── BCISystem.py    # Sistema BCI principal
-│   ├── EEGDataLoader.py # Carregamento e filtragem de dados EEG
-│   └── ...
-└── UI/                 # Interface gráfica
-    ├── MainWindow.py   # Janela principal
-    ├── CalibrationWidget.py # Widget de calibração
-    └── ...
+model = EEGInceptionERP(
+    n_chans=16,
+    n_outputs=2,  # Updated parameter name
+    n_times=500,  # Updated parameter name
+    sfreq=125
+)
 ```
 
-## 🚀 Como Usar
+### Making Predictions
+```python
+model.eval()
+with torch.no_grad():
+    output = model(eeg_data)
+    predictions = torch.argmax(output, dim=1)
+```
 
-1. **Calibração**
-   - Colete dados de calibração do paciente
-   - Treine o modelo personalizado
-   - Salve o modelo calibrado
+### K-fold Training
+```python
+# Run K-fold cross-validation training
+python train_model.py
 
-2. **Uso em Tempo Real**
-   - Carregue um modelo treinado
-   - Conecte o dispositivo OpenBCI
-   - Inicie a classificação em tempo real
+# This will:
+# 1. Split data into train/test sets
+# 2. Perform 5-fold CV on training data
+# 3. Train final model on all training data
+# 4. Evaluate on held-out test set
+# 5. Generate comprehensive plots
+```
 
-3. **Testes Multi-Paciente**
-   - Execute testes em múltiplos conjuntos de dados
-   - Visualize métricas de desempenho
-   - Compare resultados entre pacientes
+## 🔬 Customization
 
-## 📝 Notas Técnicas
+### Model Parameters
+- `n_filters`: Number of initial filters (default: 8)
+- `drop_prob`: Dropout probability (default: 0.5)
+- `n_outputs`: Number of output classes (replaces deprecated n_classes)
+- `n_times`: Number of time samples (replaces deprecated input_window_samples)
+- `sfreq`: Sampling frequency in Hz
 
-### Interoperabilidade OpenBCI-CSV ↔ EDF
+### Data Processing
+- `window_length`: Window duration in seconds (default: 4.0)
+- `baseline_length`: Baseline period in seconds (default: 1.0)
+- `overlap`: Window overlap ratio (default: 0.5)
 
-O sistema suporta:
-- Conversão de CSV do OpenBCI para formato MNE Raw
-- Transferência de anotações entre EDF e CSV
-- Marcadores LSL para gravações ao vivo
-- Coluna de TRIGGER opcional para exportação
+### Training Parameters
+- `K_FOLDS`: Number of cross-validation folds (default: 5)
+- `TEST_SPLIT`: Test set proportion (default: 0.2)
+- `EARLY_STOPPING_PATIENCE`: Early stopping patience (default: 5)
+- `NUM_EPOCHS`: Maximum training epochs (default: 50)
 
-### Pipeline de Processamento
+## 📊 Performance Evaluation
 
-1. Carregamento de dados brutos do OpenBCI
-2. Pré-processamento e filtragem
-3. Extração de características
-4. Classificação usando redes neurais
-5. Feedback em tempo real
+The training script provides comprehensive evaluation through:
 
-## 🛠 Requisitos
+### K-fold Cross-Validation
+- **Robust Performance Estimation**: 5-fold CV provides reliable performance metrics
+- **Statistical Analysis**: Mean accuracy ± standard deviation across folds
+- **Overfitting Detection**: Comparison of training vs validation performance
 
-- Python 3.x
-- PyTorch
-- PyQt5
-- MNE-Python
-- OpenBCI Python SDK
-- pylsl (Lab Streaming Layer)
-````
+### Visualization
+- Cross-validation accuracy distribution
+- Average learning curves across folds
+- Individual fold performance
+- Final model training curves
+- Comprehensive summary statistics
 
-# projetoBCI
+### Performance Metrics
+- Individual fold accuracies
+- Mean CV accuracy with confidence intervals
+- Final test set accuracy
+- Training convergence analysis
+
+## 📝 Notes
+
+- The model uses 'same' padding which may generate warnings on certain PyTorch versions
+- For Windows users, set `num_workers=0` in DataLoader
+- GPU acceleration is supported if CUDA is available
+- Model checkpoints are automatically saved during training
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## 📄 License
+
+This project is licensed under the BSD 3-Clause License.
+
+## 🙏 Acknowledgments
+
+- [Braindecode](https://braindecode.org/) for the EEGInceptionERP architecture
+- [PhysioNet](https://physionet.org/) for the EEG motor imagery dataset
+- PyTorch team for the deep learning framework
+
+## 📞 Support
+
+If you encounter any issues or have questions, please open an issue on GitHub.
