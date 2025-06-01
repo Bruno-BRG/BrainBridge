@@ -49,6 +49,7 @@ from datetime import datetime
 from .data_management_tab import DataManagementTab
 from .training_tab import TrainingTab # TrainingThread is imported within TrainingTab or used by it.
 from .pylsl_tab import PylslTab # Import PylslTab
+from .fine_tuning_tab import FineTuningTab # Import FineTuningTab
 from .plot_canvas import PlotCanvas # Import PlotCanvas, TrainingPlotCanvas is in plot_canvas.py too but not directly used in main_gui anymore
 
 
@@ -94,15 +95,15 @@ class MainWindow(QMainWindow):
 
         # Tab widget for different sections
         self.tabs = QTabWidget()
-        self.main_layout.addWidget(self.tabs)
-
-        # Create tabs
+        self.main_layout.addWidget(self.tabs)        # Create tabs
         self.data_tab = DataManagementTab(self) # Use the new class
         self.training_tab = TrainingTab(self) # Use the new TrainingTab class
+        self.fine_tuning_tab = FineTuningTab() # Add Fine-Tuning tab
         self.pylsl_tab = PylslTab(self) # Instantiate PylslTab
 
         self.tabs.addTab(self.data_tab, "Data Management")
         self.tabs.addTab(self.training_tab, "Model Training")
+        self.tabs.addTab(self.fine_tuning_tab, "Fine-Tuning") # Add Fine-Tuning tab
         self.tabs.addTab(self.pylsl_tab, "OpenBCI Live (PyLSL)") # Add PylslTab instance
 
         # Populate tabs - Handled by individual tab classes' __init__
