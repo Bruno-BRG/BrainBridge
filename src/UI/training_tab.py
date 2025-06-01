@@ -30,17 +30,18 @@ class TrainingThread(QThread):
     training_finished = pyqtSignal(object)
     training_error = pyqtSignal(str)
     log_message = pyqtSignal(str)
-
-    def __init__(self, training_params, data_cache, model_name, model_type): # Add model_type
+    
+    def __init__(self, training_params, data_cache, model_name):
         super().__init__()
         self.training_params = training_params
         self.data_cache = data_cache
-        self.model_name = model_name
-        self.model_type = model_type # Store model_type
-
+        self.model_name = model_name  # Add missing model_name attribute
+        
     def run(self):
         try:
-            self.log_message.emit(f"Starting training for model: {self.model_name} (Type: {self.model_type})...")
+            self.log_message.emit(f"Starting training for model: {self.model_name}...")
+            
+            subjects_to_use_str = self.training_params.get("train_subject_ids", "all")
             
             subjects_to_use_str = self.training_params.get("train_subject_ids", "all")
             subjects_to_use = None
@@ -63,14 +64,14 @@ class TrainingThread(QThread):
             results = train_main_script(
                 subjects_to_use=subjects_to_use,
                 num_epochs_per_fold=self.training_params["epochs"],
-                num_k_folds=self.training_params["k_folds"],
-                learning_rate=self.training_params["learning_rate"],
-                early_stopping_patience=self.training_params["early_stopping_patience"],
+                num_k_folds=self.training_params["k_folds"], # Added k_folds
                 batch_size=self.training_params["batch_size"],
                 test_split_ratio=self.training_params["test_split_size"],
+                learning_rate=self.training_params["learning_rate"],
+                early_stopping_patience=self.training_params["early_stopping_patience"],
                 data_base_path=self.data_cache["data_path"],
-                model_name=self.model_name,
-                model_type=self.model_type # Pass model_type
+                model_name=self.model_name
+                # model_params_json is not set from UI, will default to None in train_main_script
             )
             
             sys.stdout = original_stdout
@@ -104,16 +105,6 @@ class TrainingTab(QWidget):
         self.model_name_input.setPlaceholderText("Enter a name for your model")
         self.model_name_input.textChanged.connect(self.update_model_name_config)
         model_naming_layout.addRow(QLabel("Model Name:"), self.model_name_input)
-
-        # Model Type Selection
-        self.model_type_combo = QComboBox()
-        self.model_type_combo.addItems(["EEGInceptionERP", "EEGITNet"])
-        # Set initial value based on config or default
-        current_model_type = self.main_window.training_params_config.get("model_type", "EEGInceptionERP")
-        self.model_type_combo.setCurrentText(current_model_type)
-        self.model_type_combo.currentTextChanged.connect(self.update_model_type_config)
-        model_naming_layout.addRow(QLabel("Model Type:"), self.model_type_combo)
-
         model_naming_group.setLayout(model_naming_layout)
         layout.addWidget(model_naming_group)
 
@@ -204,19 +195,18 @@ class TrainingTab(QWidget):
         training_log_layout = QVBoxLayout()
         self.training_log_display = QTextEdit()
         self.training_log_display.setReadOnly(True)
-        training_log_layout.addWidget(self.training_log_display)
-        training_log_group.setLayout(training_log_layout)
-        layout.addWidget(training_log_group)
-        
+        layout.addStretch()
+        self.setLayout(layout)
+    
+    def update_model_name_config(self, text):
+        self.main_window.training_params_config["model_name"] = text
+        self.main_window.current_model_name = text # Also update MainWindow's current_model_name
         layout.addStretch()
         self.setLayout(layout)
 
     def update_model_name_config(self, text):
         self.main_window.training_params_config["model_name"] = text
         self.main_window.current_model_name = text # Also update MainWindow's current_model_name
-
-    def update_model_type_config(self, text):
-        self.main_window.training_params_config["model_type"] = text
 
     def toggle_custom_params_group(self):
         use_custom = self.rb_custom_params.isChecked()
@@ -248,28 +238,27 @@ class TrainingTab(QWidget):
                 current_params["k_folds"] = self.main_window.custom_param_inputs["k_folds"].value()
                 current_params["learning_rate"] = self.main_window.custom_param_inputs["learning_rate"].value()
                 current_params["early_stopping_patience"] = self.main_window.custom_param_inputs["early_stopping_patience"].value()
-                current_params["batch_size"] = self.main_window.custom_param_inputs["batch_size"].value()
-                current_params["test_split_size"] = self.main_window.custom_param_inputs["test_split_size"].value()
-                current_params["train_subject_ids"] = self.main_window.custom_param_inputs["train_subject_ids"].text()
-
-                # Update the main config as well
+                current_params["batch_size"] = self.main_window.custom_param_inputs["batch_size"].value() # Added
+                current_params["test_split_size"] = self.main_window.custom_param_inputs["test_split_size"].value() # Added
+                current_params["train_subject_ids"] = self.main_window.custom_param_inputs["train_subject_ids"].text() # Added
+                
+                # Update the main config as well with all custom values
                 self.main_window.training_params_config.update(current_params)
             except Exception as e:
                 self.training_log_display.append(f"Error reading custom parameters: {e}")
                 return
-        
+
         model_name = self.model_name_input.text().strip()
         if not model_name:
             model_name = "unnamed_model"
             self.model_name_input.setText(model_name) # Update UI if empty
         self.main_window.current_model_name = model_name # Update main window's model name
-        current_model_type = self.model_type_combo.currentText() # Get selected model type
 
         self.training_log_display.clear()
-        self.training_log_display.append(f"Preparing to train model: {model_name} (Type: {current_model_type})")
+        self.training_log_display.append(f"Preparing to train model: {model_name}")
         self.training_log_display.append(f"Parameters: {current_params}")
 
-        self.training_thread = TrainingThread(current_params, self.main_window.data_cache, model_name, current_model_type) # Pass model_type
+        self.training_thread = TrainingThread(current_params, self.main_window.data_cache, model_name)
         self.training_thread.log_message.connect(self.append_log_message)
         self.training_thread.training_finished.connect(self.on_training_finished)
         self.training_thread.training_error.connect(self.on_training_error)

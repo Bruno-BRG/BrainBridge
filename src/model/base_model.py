@@ -13,13 +13,13 @@ import torch
 
 class Model(ABC, torch.nn.Module): # Inherit from torch.nn.Module if models are PyTorch based
     """
-    Abstract Base Class for all models.
+    Abstract base class for all machine learning models in the BCI project.
 
-    This class defines the common interface that all specific model
-    implementations (e.g., EEGInceptionModel, SVMModel) must follow.
-    It also inherits from torch.nn.Module to integrate with PyTorch's ecosystem
-    for models that are neural networks. For non-neural network models,
-    the torch.nn.Module inheritance might be conditional or handled differently.
+    This class defines the common interface that all specific model implementations
+    (e.g., EEGInceptionERPModel) must adhere to. It ensures
+    modularity and interchangeability of models within the system.
+
+    If models are PyTorch-based, they should also inherit from `torch.nn.Module`.
 
     Args:
         model_name (str): The specific name of the model instance.

@@ -73,8 +73,8 @@ def main():
         '--mode',
         type=str,
         default='gui',
-        choices=['gui', 'train', 'cli'], # Add other modes like 'preprocess', 'evaluate' later
-        help="Operation mode: 'gui' to launch the GUI, 'train' to run model training, 'cli' to launch the command line interface."
+        choices=['gui', 'train'], # Add other modes like 'preprocess', 'evaluate' later
+        help="Operation mode: 'gui' to launch the GUI to run model training."
     )
     # Add other arguments for specific modes as needed, e.g., config file for training
     # parser.add_argument('--config', type=str, help="Path to configuration file for training/evaluation")
@@ -100,16 +100,6 @@ def main():
     if args.mode == 'gui':
         logger.info("Launching GUI...")
         start_gui()    
-        
-    elif args.mode == 'train':
-        logger.info("Starting model training...")
-        from src.model.train_model import main as train_script
-        train_script()
-    
-    elif args.mode == 'cli':
-        logger.info("Launching CLI...")
-        from src.cli.main_cli import main_menu
-        main_menu()
     
     else:
         logger.error(f"Unknown mode: {args.mode}")

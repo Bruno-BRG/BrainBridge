@@ -18,7 +18,6 @@ import matplotlib.pyplot as plt # Then import pyplot
 from torch.utils.data import DataLoader
 from src.data.data_loader import BCIDataLoader
 from .eeg_inception_erp import EEGInceptionERPModel
-from .eeg_it_net import EEGITNetModel # Add this import
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import train_test_split, KFold
 import argparse # Added argparse for CLI argument parsing
@@ -31,12 +30,12 @@ EARLY_STOPPING_PATIENCE = 5
 # K_FOLDS = 5 # Will be passed as a parameter
 TEST_SPLIT = 0.2  # Hold out test set before K-fold
 
-def train_epoch(model: EEGInceptionERPModel | EEGITNetModel, dataloader: DataLoader, criterion: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> tuple[float, float]:
+def train_epoch(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> tuple[float, float]:
     """
     Performs a single training epoch for the given model.
 
     Args:
-        model (EEGInceptionERPModel | EEGITNetModel): The neural network model to train.
+        model (EEGInceptionERPModel): The neural network model to train.
         dataloader (DataLoader): DataLoader providing training data batches.
         criterion (torch.nn.Module): The loss function (e.g., CrossEntropyLoss).
         optimizer (torch.optim.Optimizer): The optimization algorithm (e.g., Adam).
@@ -75,12 +74,12 @@ def train_epoch(model: EEGInceptionERPModel | EEGITNetModel, dataloader: DataLoa
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
-def validate(model: EEGInceptionERPModel | EEGITNetModel, dataloader: DataLoader, criterion: torch.nn.Module, device: torch.device) -> tuple[float, float]:
+def validate(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: torch.nn.Module, device: torch.device) -> tuple[float, float]:
     """
     Validates the model on the given dataset.
 
     Args:
-        model (EEGInceptionERPModel | EEGITNetModel): The neural network model to validate.
+        model (EEGInceptionERPModel): The neural network model to validate.
         dataloader (DataLoader): DataLoader providing validation data batches.
         criterion (torch.nn.Module): The loss function.
         device (torch.device): The device (CPU or CUDA) to perform validation on.
@@ -125,7 +124,6 @@ def train_single_fold(
     batch_size: int,
     model_base_path: str,
     model_name: str,
-    model_type: str = "EEGInceptionERP", 
     model_params: dict | None = None
 ) -> tuple[float, dict]:
     """
@@ -144,8 +142,7 @@ def train_single_fold(
         batch_size (int): Number of samples per training batch.
         model_base_path (str): Base directory path where model files will be saved.
         model_name (str): Name of the model, used for creating a subdirectory within `model_base_path`.
-        model_type (str, optional): Type of model to train ("EEGInceptionERP" or "EEGITNet"). Defaults to "EEGInceptionERP".
-        model_params (dict | None, optional): Additional keyword arguments for the model constructor. Defaults to None.
+        model_params (dict | None, optional): Additional keyword arguments for the EEGInceptionERPModel constructor. Defaults to None.
 
     Returns:
         tuple[float, dict]: A tuple containing:
@@ -172,41 +169,15 @@ def train_single_fold(
     if model_params is None:
         model_params = {}
 
-    if model_type == "EEGInceptionERP":
-        model = EEGInceptionERPModel(
-            n_chans=n_channels,
-            n_outputs=n_outputs,
-            n_times=n_times,
-            sfreq=125, 
-            model_name=model_name,
-            **model_params
-        ).to(device)
-    elif model_type == "EEGITNet":
-        # Default parameters for EEGITNetModel, align with its current constructor
-        eegitnet_defaults = {
-            "drop_prob": 0.5,       # Default from EEGITNetModel __init__
-            "add_log_softmax": True # Default from EEGITNetModel __init__
-        }
-        # Merge provided model_params, overriding defaults
-        merged_params = {**eegitnet_defaults, **model_params}
-
-        # Filter merged_params to only include keys that are actual constructor arguments for EEGITNetModel
-        valid_constructor_args = [
-            "drop_prob", "add_log_softmax"
-        ]
-        
-        filtered_merged_params = {k: v for k, v in merged_params.items() if k in valid_constructor_args}
-
-        model = EEGITNetModel(
-            n_chans=n_channels,
-            n_outputs=n_outputs,
-            n_times=n_times,
-            sfreq=125, # Assuming sfreq is fixed or passed correctly
-            model_name=model_name,
-            **filtered_merged_params # Pass the filtered and merged parameters
-        ).to(device)
-    else:
-        raise ValueError(f"Unsupported model_type: {model_type}")
+    # Always use EEGInceptionERPModel
+    model = EEGInceptionERPModel(
+        n_chans=n_channels,
+        n_outputs=n_outputs,
+        n_times=n_times,
+        sfreq=125, 
+        model_name=f"{model_name}_fold_{fold_num}", # Model instance name can include fold
+        **model_params
+    ).to(device)
     
     # Loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
@@ -252,7 +223,8 @@ def train_single_fold(
             patience_counter = 0
             # Save best model for this fold
             model.set_trained(True) # Set trained status before saving
-            fold_model_save_path = os.path.join(model_base_path, model_name, f'{model_type.lower().replace(" ", "_")}_fold_{fold_num}.pth')
+            # Fixed model type in path
+            fold_model_save_path = os.path.join(model_base_path, model_name, f'eeginceptionerp_fold_{fold_num}.pth')
             os.makedirs(os.path.dirname(fold_model_save_path), exist_ok=True)
             model.save(fold_model_save_path)
         else:
@@ -282,14 +254,13 @@ def main(
     data_base_path: str = "eeg_data",
     runs_to_include: list[int] | None = None,
     model_name: str = "unnamed_model",
-    model_type: str = "EEGInceptionERP",
     model_params_json: str | None = None
 ) -> dict:
     """
     Main function to orchestrate the EEG model training and evaluation pipeline.
 
-    This function loads data, performs K-fold cross-validation, trains a final model,
-    and generates plots summarizing the training results.
+    This function loads data, performs K-fold cross-validation, trains a final model
+    (EEGInceptionERP), and generates plots summarizing the training results.
 
     Args:
         subjects_to_use (list[int] | str | None, optional): List of subject IDs (integers),
@@ -306,10 +277,8 @@ def main(
             If None, defaults to [4, 8, 12] (motor imagery runs). Defaults to None.
         model_name (str, optional): Name for the current model run. This will be used to create
             a subdirectory under "models/" for saving model files and plots. Defaults to "unnamed_model".
-        model_type (str, optional): Type of model to train ("EEGInceptionERP" or "EEGITNet").
-            Defaults to "EEGInceptionERP".
         model_params_json (str | None, optional): JSON string containing additional keyword
-            arguments for the model constructor. Defaults to None.
+            arguments for the EEGInceptionERPModel constructor. Defaults to None.
 
     Returns:
         dict: A dictionary containing key training outcomes:
@@ -407,7 +376,6 @@ def main(
             batch_size=batch_size, 
             model_base_path=current_model_base_path, 
             model_name=model_name, 
-            model_type=model_type, 
             model_params=model_params
         )
         
@@ -425,6 +393,7 @@ def main(
     for i, acc in enumerate(fold_results, 1):
         print(f"  Fold {i}: {acc:.4f}")
     print(f"\nMean CV Accuracy: {cv_mean:.4f} ± {cv_std:.4f}")
+    print(f"Model Type: EEGInceptionERP") # Explicitly state model type
     print(f"{'='*50}")
     
     # Train final model on all training data and evaluate on test set
@@ -437,11 +406,10 @@ def main(
         batch_size=batch_size,
         model_base_path=current_model_base_path, 
         model_name=model_name, 
-        model_type=model_type, 
         model_params=model_params
     )
     
-    print(f"\\nFinal test accuracy for {model_name} ({model_type}): {final_best_acc:.4f}")
+    print(f"\\nFinal test accuracy for {model_name} (EEGInceptionERP): {final_best_acc:.4f}")
     
     # Generate comprehensive plots
     print(f"\\nGenerating training plots for {model_name}...")
@@ -536,7 +504,7 @@ def main(
     plt.axis('off')
     # Add model_type to summary text
     summary_text = f"""
-    Model Type: {model_type}
+    Model Type: EEGInceptionERP
     K-Fold Cross-Validation Summary
     
     Number of Folds: {num_k_folds} 
@@ -580,7 +548,6 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='eeg_data', help='Path to the EEG data directory.')
     parser.add_argument('--runs', type=int, nargs='+', default=None, help='List of runs to include (e.g., 4 8 12). Defaults to motor imagery runs.')
     parser.add_argument('--model_name', type=str, default="unnamed_bci_model", help='Name for the model run, used for saving outputs.')
-    parser.add_argument('--model_type', type=str, default="EEGInceptionERP", choices=["EEGInceptionERP", "EEGITNet"], help='Type of model to train.')
     parser.add_argument('--model_params_json', type=str, default=None, help='JSON string of additional model parameters.')
 
     args = parser.parse_args()
@@ -596,7 +563,6 @@ if __name__ == '__main__':
         data_base_path=args.data_path,
         runs_to_include=args.runs,
         model_name=args.model_name,
-        model_type=args.model_type, 
         model_params_json=args.model_params_json
     )
     print("\\nTraining Run Summary:")

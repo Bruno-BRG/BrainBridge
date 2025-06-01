@@ -1,0 +1,56 @@
+@startuml
+
+actor User
+participant "GUI" as GUI
+participant "BCIDataLoader" as Loader
+participant "Model" as Model
+participant "RealTimeProcessor" as RT
+database "FileSystem" as FS
+
+' Data Loading Sequence
+User -> GUI: Load EEG Data
+activate GUI
+GUI -> Loader: initialize_data_loader()
+activate Loader
+Loader -> FS: read_csv_files()
+FS --> Loader: raw_data
+Loader -> Loader: preprocess_data()
+Loader -> Loader: create_windows()
+Loader --> GUI: processed_data
+deactivate Loader
+GUI --> User: display_data
+deactivate GUI
+
+' Training Sequence
+User -> GUI: Start Training
+activate GUI
+GUI -> Model: train_model()
+activate Model
+Model -> Model: k_fold_cross_validation()
+loop for each fold
+    Model -> Model: train_epoch()
+    Model -> Model: validate()
+end
+Model -> FS: save_model()
+Model --> GUI: training_results
+deactivate Model
+GUI --> User: display_results
+deactivate GUI
+
+' Real-time Inference Sequence
+User -> GUI: Start Real-time Stream
+activate GUI
+GUI -> RT: initialize()
+activate RT
+loop while streaming
+    RT -> RT: add_samples()
+    RT -> RT: preprocess_window()
+    RT -> Model: predict()
+    Model --> RT: predictions
+    RT --> GUI: update_display()
+    GUI --> User: show_predictions
+end
+deactivate RT
+deactivate GUI
+
+@enduml

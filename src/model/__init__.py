@@ -9,7 +9,6 @@ Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
 # Model module for BCI project
 from .base_model import Model
 from .eeg_inception_erp import EEGInceptionERPModel
-from .eeg_it_net import EEGITNetModel
 from .train_model import main as train_main_script
 
-__all__ = ['Model', 'EEGInceptionERPModel', 'EEGITNetModel', 'train_main_script']
+__all__ = ['Model', 'EEGInceptionERPModel', 'train_main_script']

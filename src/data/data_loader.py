@@ -340,9 +340,12 @@ class BCIDataLoader:
 
 class BCIDataset(Dataset):
     """
-    PyTorch Dataset class for BCI EEG data
-    
-    Handles windowed EEG data for CNN training with optional data augmentation
+    PyTorch Dataset for windowed EEG data.
+
+    Args:
+        windows (np.ndarray): Array of EEG windows (n_windows, n_channels, n_samples).
+        labels (np.ndarray): Array of labels corresponding to each window.
+        transform (Optional[callable]): Optional transform to be applied on a sample.
     """
     
     def __init__(self, 
@@ -442,19 +445,19 @@ def create_data_loaders(data_path: str,
                        num_workers: int = 4,
                        **loader_kwargs) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
-    Create train, validation and test data loaders
-    
+    Creates PyTorch DataLoaders for training, validation, and testing.
+
     Args:
-        data_path: Path to EEG data directory
-        subjects: List of subject IDs to include
-        batch_size: Batch size for data loaders
-        validation_split: Fraction of data for validation
-        test_split: Fraction of data for testing
-        num_workers: Number of worker processes for data loading
-        **loader_kwargs: Additional arguments for BCIDataLoader
-        
+        data_path (str): Path to the root data directory.
+        subjects (Optional[List[int]]): List of subject IDs to include. If None, all available subjects are used.
+        batch_size (int): Number of samples per batch.
+        validation_split (float): Proportion of data to use for validation.
+        test_split (float): Proportion of data to use for testing.
+        num_workers (int): Number of subprocesses to use for data loading.
+        **loader_kwargs: Additional arguments to pass to the BCIDataLoader.
+
     Returns:
-        Tuple of (train_loader, val_loader, test_loader)
+        Tuple[DataLoader, DataLoader, DataLoader]: Train, validation, and test DataLoaders.
     """
     # Initialize data loader
     bci_loader = BCIDataLoader(data_path, subjects=subjects, **loader_kwargs)

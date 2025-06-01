@@ -1,0 +1,133 @@
+@startuml
+
+' Style configurations
+skinparam classAttributeIconSize 0
+skinparam monochrome true
+skinparam shadowing false
+
+' Base Model Abstract Class
+abstract class Model {
+  #_model_name: str
+  #_model_version: str
+  #_is_trained: bool
+  +forward(x: Tensor): Tensor
+  +predict(data: Tensor): Tensor
+  +save(file_path: str): void
+  {abstract} +load(file_path: str): void
+  +{abstract} get_features(x: Tensor): Tensor
+  +device(): torch.device
+}
+
+' Model Implementations
+class EEGInceptionERPModel {
+  -internal_model: BraindecodeEEGInceptionERP
+  +__init__(n_chans: int, n_outputs: int, n_times: int, sfreq: float)
+  +forward(x: Tensor): Tensor
+  +get_features(x: Tensor): Tensor
+  +save(file_path: str): void
+  +load(file_path: str): void
+}
+
+' Data Management Classes
+class BCIDataLoader {
+  -data_path: str
+  -subjects: List[int]
+  -runs: List[int]
+  -sample_rate: int
+  -n_channels: int
+  -channel_names: List[str]
+  -event_mapping: Dict
+  +__init__(data_path: str, subjects: List[int], runs: List[int])
+  +get_available_subjects(): List[int]
+  +load_csv_data(subject_id: int, run: int): Tuple[ndarray, List]
+  +preprocess_data(eeg_data: ndarray): ndarray
+  +create_windows(eeg_data: ndarray, events: List): Tuple[ndarray, ndarray]
+  +load_subject_data(subject_id: int): Tuple[ndarray, ndarray]
+  +load_all_subjects(): Tuple[ndarray, ndarray, ndarray]
+}
+
+class BCIDataset {
+  -windows: Tensor
+  -labels: Tensor
+  -transform: callable
+  -augment: bool
+  +__init__(windows: ndarray, labels: ndarray, transform: callable)
+  +__len__(): int
+  +__getitem__(idx: int): Tuple[Tensor, Tensor]
+  -_augment_window(window: Tensor): Tensor
+  +get_class_weights(): Tensor
+}
+
+' Signal Processing Class
+class EEGFilter {
+  -sample_rate: float
+  +__init__(sample_rate: float)
+  +bandpass_filter(data: ndarray, l_freq: float, h_freq: float): ndarray
+  +notch_filter(data: ndarray, freq: float): ndarray
+  +highpass_filter(data: ndarray, cutoff: float): ndarray
+  +lowpass_filter(data: ndarray, cutoff: float): ndarray
+  +z_score_normalize(data: ndarray): ndarray
+  +preprocess_epoch(data: ndarray): ndarray
+}
+
+' Real-time Processing Class
+class RealTimeInferenceProcessor {
+  -model: Model
+  -buffer: deque
+  -filter: EEGFilter
+  -window_size: int
+  +__init__(model: Model, n_channels: int, sample_rate: float)
+  +add_samples(samples: ndarray): void
+  +predict(new_samples: ndarray): Dict
+  +reset_buffer(): void
+  -preprocess_window(window: ndarray): ndarray
+}
+
+' UI Classes
+class MainWindow {
+  -data_cache: Dict
+  -tabs: QTabWidget
+  +__init__()
+  +initialize_ui(): void
+  +handle_error(error: str): void
+}
+
+class DataManagementTab {
+  -main_window: MainWindow
+  -plot_canvas: PlotCanvas
+  +__init__(parent_main_window: MainWindow)
+  +browse_data_directory(): void
+  +load_data_action(): void
+  +update_plot(): void
+}
+
+class TrainingTab {
+  -main_window: MainWindow
+  -training_thread: TrainingThread
+  +__init__(parent_main_window: MainWindow)
+  +start_training_action(): void
+  +on_training_finished(results: Dict): void
+}
+
+class PylslTab {
+  -main_window: MainWindow
+  -plot_canvas: PlotCanvas
+  -stream_inlet: StreamInlet
+  +__init__(parent_main_window: MainWindow)
+  +refresh_pylsl_streams(): void
+  +start_stream(): void
+  +stop_stream(): void
+}
+
+' Relationships
+Model <|-- EEGInceptionERPModel
+MainWindow *-- DataManagementTab
+MainWindow *-- TrainingTab
+MainWindow *-- PylslTab
+BCIDataLoader --> BCIDataset : creates
+RealTimeInferenceProcessor --> EEGFilter : uses
+RealTimeInferenceProcessor --> Model : uses
+DataManagementTab --> BCIDataLoader : uses
+TrainingTab --> Model : uses
+
+@enduml

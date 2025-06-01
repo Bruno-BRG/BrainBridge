@@ -38,7 +38,7 @@ class RealTimeInferenceProcessor:
         Initialize the real-time inference processor.
         
         Args:
-            model: The trained EEG model for inference (EEGInceptionERPModel or EEGITNetModel)
+            model: The trained EEG model for inference (EEGInceptionERPModel)
             n_channels (int): Number of EEG channels expected
             sample_rate (float): Sample rate in Hz
             window_size (int): Number of samples in inference window (default 400 for 3.2s at 125Hz)
