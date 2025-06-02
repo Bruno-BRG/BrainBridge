@@ -335,5 +335,59 @@ class RLModelAdapter:
 
 ---
 
+## 🎯 IMMEDIATE REFACTORING REQUIREMENTS (Before Sprint 2)
+
+### User Experience Overhaul - Priority: CRITICAL
+
+#### Task 1.4: Patient Registration System ⚡ URGENT
+- [ ] **File**: `src/UI/patient_registration_tab.py` - IN PROGRESS
+- [ ] Create patient sign-up interface with personal information
+- [ ] Add patient ID generation system  
+- [ ] Implement patient directory creation and metadata saving
+- [ ] Implement patient information forms (name, age, condition details, notes)
+- [ ] Create patient selection/switching interface
+- [ ] Add patient profile management (edit, view history)
+- [ ] **Integration**: Link to fine-tuning and recording workflows
+
+#### Task 1.5: UI Architecture Refactoring ⚡ URGENT
+- [ ] **File**: `src/UI/main_gui.py` - MAJOR REFACTOR
+- [ ] Remove "Data Management" tab (dev-only, hide from end users)
+- [ ] Remove "Training" tab (dev-only, hide from end users)  
+- [ ] Restructure tab order for end users:
+  1. Patient Registration
+  2. Recording Session (PyLSL)
+  3. Fine-Tuning
+  4. Real-Time Inference
+- [ ] Add developer mode toggle for accessing dev tabs
+- [ ] Improve overall UI aesthetics and user experience
+
+#### Task 1.6: Fine-Tuning System Simplification ⚡ URGENT
+- [ ] **File**: `src/model/fine_tuning.py` - Remove Freeze Strategy
+- [ ] Remove layer freezing options from fine-tuning
+- [ ] Simplify fine-tuning to train all layers with reduced learning rate
+- [ ] Update GUI to remove freeze strategy controls
+- [ ] Simplify parameter configuration for end users
+- [ ] Focus on ease-of-use over technical complexity
+
+#### Task 1.7: Patient-Centric Data Flow ⚡ URGENT
+- [ ] **Modify**: `src/data/patient_data_manager.py`
+- [ ] **Modify**: `src/UI/pylsl_tab.py`
+- [ ] **Modify**: `src/UI/fine_tuning_tab.py`
+- [ ] Implement patient context throughout application
+- [ ] Auto-save all recordings to current patient's folder
+- [ ] Auto-save fine-tuned models with patient ID
+- [ ] Create patient session history tracking
+- [ ] Ensure all patient data is properly organized
+
+#### Task 1.8: User Flow Redesign ⚡ URGENT
+- [ ] Design intuitive step-by-step workflow for end users
+- [ ] Add workflow guidance and instructions in UI
+- [ ] Create progress indicators showing workflow completion
+- [ ] Implement data validation and user feedback
+- [ ] Add tooltips and help text for non-technical users
+- [ ] Remove technical jargon from user interface
+
+---
+
 *Last Updated: June 1, 2025*
-*Status: Sprint 1 Complete - Ready for Sprint 2 (Real-Time Tab)*
+*Status: Sprint 1 Complete - URGENT REFACTORING REQUIRED BEFORE Sprint 2*

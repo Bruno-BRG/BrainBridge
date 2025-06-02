@@ -1,0 +1,166 @@
+@startuml BCI System Architecture
+!theme plain
+skinparam backgroundColor white
+skinparam componentStyle rectangle
+skinparam linetype ortho
+
+title BCI Fine-Tuning and Real-Time Inference System Architecture
+
+' Define layers
+package "External Data Sources" as ExternalData {
+    [PhysioNet Dataset\n(CSV Files)] as PhysioNet
+    [PyLSL EEG Stream\n(Real-time)] as PyLSL
+    [Patient Recordings\n(Sessions)] as PatientData
+}
+
+package "User Interface Layer" as UILayer {
+    [Main GUI Window\n(BCIMainWindow)] as MainGUI
+    
+    package "UI Tabs" {
+        [Data Management Tab\n(DataManagementTab)] as DataTab
+        [Training Tab\n(TrainingTab)] as TrainingTab
+        [PyLSL Tab\n(PylslTab)] as PyLSLTab
+        [Fine-Tuning Tab\n(FineTuningTab)] as FineTuningTab
+        [Plot Canvas\n(PlotCanvas)] as PlotCanvas
+    }
+}
+
+package "Data Management Layer" as DataLayer {
+    [BCI Data Loader\n(BCIDataLoader)] as DataLoader
+    [Patient Data Manager\n(PatientDataManager)] as PatientManager
+    [BCI Dataset\n(BCIDataset)] as Dataset
+}
+
+package "Signal Processing Layer" as ProcessingLayer {
+    [EEG Filter\n(EEGFilter)] as EEGFilter
+    [Preprocessing Pipeline] as Preprocessing
+    [Feature Extraction] as FeatureExtraction
+    [Windowing & Epoching] as Windowing
+}
+
+package "Model Layer" as ModelLayer {
+    package "Base Architecture" {
+        [Base Model\n(Abstract)] as BaseModel
+    }
+    
+    package "Implementations" {
+        [EEG Inception ERP\n(EEGInceptionERPModel)] as InceptionModel
+        [Pre-trained Models\n(K-fold variants)] as PretrainedModels
+        [Fine-tuned Models\n(Patient-specific)] as FinetunedModels
+    }
+    
+    package "Training & Fine-tuning" {
+        [Model Trainer\n(EEGTrainer)] as Trainer
+        [Model Fine-Tuner\n(ModelFineTuner)] as FineTuner
+        [K-fold Cross Validation] as KFold
+    }
+}
+
+package "Real-time Inference Layer" as RealtimeLayer {
+    [Real-time Inference Processor\n(RealTimeInferenceProcessor)] as RealtimeProcessor
+    [Sample Buffer\n(Sliding Window)] as SampleBuffer
+    [Prediction Engine] as PredictionEngine
+    [Output Handler] as OutputHandler
+}
+
+package "Storage Layer" as StorageLayer {
+    database "Model Storage" as ModelStorage {
+        [Pre-trained Models\n(.pth files)] as ModelFiles
+        [Fine-tuned Models\n(.pth files)] as FinetunedFiles
+        [Training Results\n(.png, logs)] as ResultFiles
+    }
+    
+    database "Data Storage" as DataStorage {
+        [EEG Data\n(PhysioNet CSV)] as EEGData
+        [Patient Data\n(Sessions, Metadata)] as PatientStorage
+        [Configuration Files\n(.json)] as ConfigFiles
+    }
+    
+    database "Logs" as LogStorage {
+        [Application Logs\n(.log files)] as AppLogs
+        [Training Logs] as TrainingLogs
+    }
+}
+
+' External connections
+PhysioNet --> DataLoader : Load training data
+PyLSL --> PyLSLTab : Stream EEG data
+PyLSL --> RealtimeProcessor : Real-time data
+PatientData --> PatientManager : Load patient sessions
+
+' UI Layer connections
+MainGUI --> DataTab
+MainGUI --> TrainingTab
+MainGUI --> PyLSLTab
+MainGUI --> FineTuningTab
+DataTab --> PlotCanvas : Display data
+TrainingTab --> PlotCanvas : Show training plots
+FineTuningTab --> PlotCanvas : Show validation plots
+
+' Data Layer connections
+DataTab --> DataLoader : Control data loading
+DataLoader --> Dataset : Create datasets
+PatientManager --> Dataset : Patient-specific datasets
+DataLoader --> EEGData : Read CSV files
+PatientManager --> PatientStorage : Manage patient data
+
+' Processing connections
+DataLoader --> EEGFilter : Apply filtering
+EEGFilter --> Preprocessing : Filter data
+Preprocessing --> Windowing : Create windows
+Windowing --> FeatureExtraction : Extract features
+RealtimeProcessor --> EEGFilter : Real-time filtering
+
+' Model Layer connections
+BaseModel <|-- InceptionModel : Implements
+TrainingTab --> Trainer : Start training
+Trainer --> InceptionModel : Train model
+Trainer --> KFold : Cross-validation
+FineTuningTab --> FineTuner : Start fine-tuning
+FineTuner --> PretrainedModels : Load base model
+FineTuner --> FinetunedModels : Create patient model
+FineTuner --> PatientManager : Get patient data
+
+' Real-time connections
+PyLSLTab --> RealtimeProcessor : Configure real-time
+RealtimeProcessor --> SampleBuffer : Buffer samples
+SampleBuffer --> PredictionEngine : Windowed data
+PredictionEngine --> InceptionModel : Run inference
+PredictionEngine --> FinetunedModels : Use patient model
+PredictionEngine --> OutputHandler : Predictions
+
+' Storage connections
+Trainer --> ModelFiles : Save models
+FineTuner --> FinetunedFiles : Save fine-tuned models
+Trainer --> ResultFiles : Save results
+ModelFiles --> PretrainedModels : Load models
+FinetunedFiles --> FinetunedModels : Load patient models
+ConfigFiles --> PatientManager : Load metadata
+AppLogs --> LogStorage : Write logs
+TrainingLogs --> LogStorage : Training metrics
+
+' Data flow annotations
+note top of PhysioNet : Motor Imagery Dataset\n(T0: Rest, T1: Left, T2: Right)
+note bottom of PyLSL : Real-time EEG Stream\n16 channels @ 125Hz
+note right of RealtimeProcessor : 400-sample windows\nevery 30ms
+note right of InceptionModel : Input: (batch, 16, 400)\nOutput: Left/Right prediction
+note bottom of ModelStorage : K-fold models\nFinal ensemble model\nPatient-specific models
+
+' Color coding
+skinparam component {
+    BackgroundColor<<UI>> LightBlue
+    BackgroundColor<<Data>> LightGreen
+    BackgroundColor<<Processing>> LightYellow
+    BackgroundColor<<Model>> LightPink
+    BackgroundColor<<Realtime>> LightCyan
+    BackgroundColor<<Storage>> LightGray
+}
+
+UILayer <<UI>>
+DataLayer <<Data>>
+ProcessingLayer <<Processing>>
+ModelLayer <<Model>>
+RealtimeLayer <<Realtime>>
+StorageLayer <<Storage>>
+
+@enduml
