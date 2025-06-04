@@ -421,10 +421,9 @@ class BCIDataset(Dataset):
             shift = torch.randint(-10, 11, (1,)).item()
             if shift != 0:
                 window = torch.roll(window, shift, dims=1)
-        
-        # Amplitude scaling
+          # Amplitude scaling
         if torch.rand(1) < 0.3:
-            scale = torch.uniform(0.9, 1.1, (1,)).item()
+            scale = torch.FloatTensor(1).uniform_(0.9, 1.1).item()
             window = window * scale
         
         return window
