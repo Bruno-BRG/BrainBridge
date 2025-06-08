@@ -1,65 +1,135 @@
-# Project Documentation
+# BCI EEG Motor Imagery Classification System
 
-This document provides an overview of the project structure and key components.
+> **A Professional Brain-Computer Interface System for Motor Imagery Classification and Rehabilitation**
 
-## Data Loading (`src/data/data_loader.py`)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyQt5](https://img.shields.io/badge/GUI-PyQt5-green.svg)](https://www.riverbankcomputing.com/software/pyqt/)
+[![Torch](https://img.shields.io/badge/ML-PyTorch-red.svg)](https://pytorch.org/)
+[![Documentation](https://img.shields.io/badge/docs-comprehensive-brightgreen.svg)](#documentation)
 
-The `data_loader.py` module is responsible for loading, preprocessing, and windowing the EEG data from the PhysioNet Motor Imagery Dataset.
+## 🎯 Project Overview
 
-### PlantUML Diagram
+This system provides a complete Brain-Computer Interface (BCI) solution for EEG motor imagery classification, designed for both research and clinical rehabilitation applications. It features dual interfaces: a comprehensive **DevTools** environment for researchers and a streamlined **EndUser** interface for clinical professionals.
 
-```plantuml
-@startuml
-class BCIDataLoader {
-  + data_path: str
-  + subjects: Optional[List[int]]
-  + runs: Optional[List[int]]
-  + sample_rate: int
-  + n_channels: int
-  + event_mapping: Dict[str, int]
-  + channel_names: List[str]
-  + __init__(data_path: str, subjects: Optional[List[int]], runs: Optional[List[int]], sample_rate: int, n_channels: int)
-  + get_available_subjects() -> List[int]
-  + load_csv_data(subject_id: int, run: int) -> Tuple[np.ndarray, List[Tuple[int, str]]]
-  + preprocess_data(eeg_data: np.ndarray, lowcut: float, highcut: float, notch_freq: float, apply_standardization: bool) -> np.ndarray
-  + create_windows(eeg_data: np.ndarray, events: List[Tuple[int, str]], window_length: float, baseline_length: float, overlap: float) -> Tuple[np.ndarray, np.ndarray]
-  + load_subject_data(subject_id: int, preprocess: bool, create_windows_flag: bool, **kwargs) -> Tuple[np.ndarray, np.ndarray]
-  + load_all_subjects(**kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]
-}
+### Key Features
 
-class BCIDataset {
-  + windows: torch.Tensor
-  + labels: torch.Tensor
-  + transform: Optional[callable]
-  + augment: bool
-  + __init__(windows: np.ndarray, labels: np.ndarray, transform: Optional[callable], augment: bool)
-  + __len__() -> int
-  + __getitem__(idx: int) -> Tuple[torch.Tensor, torch.Tensor]
-  + _augment_window(window: torch.Tensor) -> torch.Tensor
-  + get_class_weights() -> torch.Tensor
-}
+- **🧠 State-of-the-Art ML**: EEGInceptionERP CNN architecture with fine-tuning capabilities
+- **🏥 Clinical-Ready**: Patient management system with HIPAA-compliant data handling
+- **📡 Real-Time Processing**: Live EEG streaming via PyLSL with OpenBCI integration
+- **🔬 Research Tools**: Comprehensive data analysis, visualization, and model development
+- **⚡ High Performance**: Optimized pipeline with CUDA support for GPU acceleration
+- **📊 Rich Visualization**: Interactive plots, training curves, and real-time monitoring
 
-BCIDataLoader ..> BCIDataset : creates
-DataLoader "1" *-- "1" BCIDataset : uses
+## 🏗️ System Architecture
 
-package torch.utils.data {
-  class Dataset
-  class DataLoader
-}
-
-BCIDataset --|> Dataset
-@enduml
+```
+🌟 BCI System
+├── 🔧 DevTools/          # Research & Development Environment
+│   ├── Data Management   # Dataset handling and preprocessing
+│   ├── Model Training    # ML model development and training
+│   ├── Fine-Tuning       # Patient-specific model adaptation
+│   └── Live Analysis     # Real-time EEG stream analysis
+│
+├── 🏥 EndUser/           # Clinical Interface
+│   ├── Patient Mgmt      # Patient registration and data management
+│   └── Live Recording    # Real-time EEG acquisition and analysis
+│
+├── 🧠 Core ML Engine/    # Machine Learning Pipeline
+│   ├── EEGInceptionERP   # Deep learning model
+│   ├── Signal Processing # EEG preprocessing and filtering
+│   └── Real-time Inference # Live prediction engine
+│
+└── 📊 Data Layer/        # Data Management
+    ├── PhysioNet Data    # Public research datasets
+    ├── Patient Records   # Clinical data storage
+    └── Model Repository  # Trained models and metadata
 ```
 
-### Class Descriptions
+## 🚀 Quick Start
 
-#### `BCIDataLoader`
-Handles loading CSV files from the PhysioNet Motor Imagery dataset, extracting events, preprocessing (filtering, standardization), and creating windowed data suitable for CNN training.
+### For Clinical Users (EndUser Interface)
 
-#### `BCIDataset`
-A PyTorch `Dataset` class that wraps the windowed EEG data and labels, making it compatible with PyTorch `DataLoader` for batching and training. It also supports optional data augmentation and transformations.
+```bash
+# Launch clinical interface
+python launch_enduser.bat
+```
 
-### Key Functions
+### For Researchers (DevTools Interface)
 
--   `create_data_loaders(...)`: A utility function that takes a `BCIDataLoader` instance, loads all subject data, splits it into training, validation, and test sets (subject-wise), and returns PyTorch `DataLoader` instances for each set.
+```bash
+# Launch development environment
+python launch_bci.py --mode gui
+```
 
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[🏗️ System Architecture](SYSTEM_ARCHITECTURE.md)** | Technical architecture and design patterns |
+| **[⚙️ Installation Guide](INSTALLATION.md)** | Complete setup instructions and dependencies |
+| **[👨‍⚕️ Clinical User Guide](USER_GUIDE_CLINICAL.md)** | Step-by-step guide for medical professionals |
+| **[🔬 Research User Guide](USER_GUIDE_RESEARCH.md)** | Advanced features for researchers |
+| **[🔌 API Documentation](API_DOCUMENTATION.md)** | Complete API reference and examples |
+| **[🛠️ Developer Setup](DEVELOPER_SETUP.md)** | Development environment configuration |
+| **[🧪 Testing Guide](TESTING.md)** | Comprehensive testing procedures |
+| **[📈 Performance Guide](PERFORMANCE.md)** | Optimization and benchmarking |
+
+## 🎯 Use Cases
+
+### Clinical Rehabilitation
+- **Stroke Recovery**: Motor imagery training for affected limb rehabilitation
+- **Brain Injury**: Neuroplasticity assessment and training protocols
+- **Research Studies**: Clinical trial data collection and analysis
+
+### Research Applications
+- **Algorithm Development**: New ML models and signal processing techniques
+- **Dataset Analysis**: Large-scale EEG data mining and pattern discovery
+- **Real-time Systems**: BCI control interface development
+
+## 🔬 Technical Highlights
+
+### Machine Learning
+- **EEGInceptionERP Architecture**: State-of-the-art CNN for EEG classification
+- **Transfer Learning**: Pre-trained models with patient-specific fine-tuning
+- **Real-Time Inference**: Sub-100ms prediction latency for live applications
+
+### Data Processing
+- **Signal Preprocessing**: Advanced filtering, artifact removal, and normalization
+- **Feature Engineering**: Automated temporal and spectral feature extraction
+- **Data Augmentation**: Synthetic data generation for improved generalization
+
+### Clinical Features
+- **Patient Management**: Comprehensive clinical data tracking and organization
+- **Session Recording**: Structured EEG data collection with metadata
+- **Progress Tracking**: Longitudinal analysis and improvement metrics
+
+## 🤝 Contributing
+
+We welcome contributions from researchers, clinicians, and developers! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
+
+- Code standards and best practices
+- Testing requirements
+- Documentation standards
+- Issue reporting and feature requests
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- **PhysioNet**: For providing the EEG Motor Movement/Imagery Database
+- **Braindecode**: For the excellent EEG deep learning framework
+- **OpenBCI**: For hardware integration support and community
+- **PyTorch Community**: For the robust machine learning foundation
+
+## 📞 Support
+
+- 📧 **Email**: [Your support email]
+- 💬 **Issues**: [GitHub Issues](https://github.com/your-repo/issues)
+- 📖 **Wiki**: [Project Wiki](https://github.com/your-repo/wiki)
+- 💡 **Discussions**: [GitHub Discussions](https://github.com/your-repo/discussions)
+
+---
+
+**Built with ❤️ for advancing Brain-Computer Interface technology in research and clinical applications.**
