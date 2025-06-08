@@ -61,9 +61,6 @@ python launch_bci.py --mode train --config research_config.yaml
 
 **Supported Formats:**
 - CSV files (OpenBCI format)
-- EDF files (European Data Format)
-- BDF files (BioSemi Data Format)
-- FIF files (Neuromag/Elekta)
 
 **Data Structure Requirements:**
 ```python
@@ -469,7 +466,7 @@ statistical_analysis = {
 
 ```python
 export_formats = {
-    'raw_data': ['CSV', 'EDF', 'BDF', 'FIF'],
+    'raw_data': ['CSV'],
     'processed_data': ['NumPy', 'HDF5', 'Parquet'],
     'models': ['PyTorch', 'ONNX', 'TensorFlow'],
     'results': ['JSON', 'CSV', 'Excel', 'LaTeX']
