@@ -35,6 +35,7 @@ except ImportError:
 # Import tab classes
 
 from src.UI.pylsl_tab import PylslTab # Import PylslTab
+from src.UI.patient_management_tab import PatientManagementTab  # Updated import
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -69,29 +70,73 @@ class MainWindow(QMainWindow):
         }
 
         # References to custom param input fields
-        self.custom_param_inputs = {}
-
-        # Main widget and layout
+        self.custom_param_inputs = {}        # Main widget and layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
-
+        
         # Tab widget for different sections
         self.tabs = QTabWidget()
-        self.main_layout.addWidget(self.tabs)        # Create tabs
+        self.main_layout.addWidget(self.tabs)
+          # Create tabs
         self.pylsl_tab = PylslTab(self) # Instantiate PylslTab
-
+        self.patient_tab = PatientManagementTab(self)  # Instantiate PatientManagementTab
+        self.patient_tab.patient_selected.connect(self.on_patient_selected)  # Connect signal
+        
+        # Add tabs to the tab widget
+        self.tabs.insertTab(0, self.patient_tab, "Patient Management")  # Add as first tab
         self.tabs.addTab(self.pylsl_tab, "OpenBCI Live (PyLSL)") # Add PylslTab instance
-
+        
         # Populate tabs - Handled by individual tab classes' __init__
         # self.setup_data_tab() # Handled by DataManagementTab
         # self.setup_training_tab() # Handled by TrainingTab
         # self.setup_pylsl_tab() # Now handled by PylslTab
-
-        # Exit button
+          # Exit button
         self.exit_button = QPushButton("Exit Application")
         self.exit_button.clicked.connect(self.close)
         self.main_layout.addWidget(self.exit_button)
+
+    def on_patient_selected(self, patient_id, patient_data):
+        """Handle patient selection from patient management tab."""
+        self.current_patient_id = patient_id
+        self.current_patient_data = patient_data
+        
+        # Update window title to show current patient
+        self.setWindowTitle(f"BCI Application - Patient: {patient_id}")
+        
+        # Update data paths to be patient-specific
+        patient_data_dir = os.path.join(project_root, "patient_data", patient_id)
+        os.makedirs(patient_data_dir, exist_ok=True)
+        
+        # Update EEG data path for this patient
+        self.data_cache["patient_data_dir"] = patient_data_dir
+        self.data_cache["current_patient_id"] = patient_id
+        
+        # Configure PylslTab to use patient folder automatically
+        if hasattr(self.pylsl_tab, 'set_patient_folder'):
+            self.pylsl_tab.set_patient_folder(patient_id, patient_data)
+        
+        print(f"Patient selected: {patient_id} - {patient_data.get('name', 'Unknown')}")
+
+    def clear_patient_selection(self):
+        """Clear the current patient selection and reset related configurations."""
+        self.current_patient_id = None
+        self.current_patient_data = None
+        
+        # Reset window title
+        self.setWindowTitle("BCI Application")
+        
+        # Clear patient-specific data cache
+        if "patient_data_dir" in self.data_cache:
+            del self.data_cache["patient_data_dir"]
+        if "current_patient_id" in self.data_cache:
+            del self.data_cache["current_patient_id"]
+        
+        # Clear PylslTab patient folder configuration
+        if hasattr(self.pylsl_tab, 'clear_patient_folder'):
+            self.pylsl_tab.clear_patient_folder()
+        
+        print("Patient selection cleared")
 
     def closeEvent(self, event):
         # Ensure resources in tabs are cleaned up if they have specific cleanup methods
