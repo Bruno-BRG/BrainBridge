@@ -13,7 +13,6 @@ import warnings # Added: for suppressing warnings
 from pathlib import Path
 import pkg_resources
 import argparse # Added: for command-line argument parsing
-from src.UI.main_gui import start_gui # Added: Import the GUI start function
 
 # Suppress expected warnings from ML libraries
 warnings.filterwarnings("ignore", category=UserWarning, module="braindecode.models.base")
@@ -91,16 +90,17 @@ def main():
     if missing:
         logging.error(f"Missing dependencies: {', '.join(missing)}. Please install them.") # Corrected: Use logging
         sys.exit(1) # Corrected: Use sys.exit
-    
-    # Setup logging
+      # Setup logging
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info(f"Starting BCI application in {args.mode} mode")
 
     if args.mode == 'gui':
         logger.info("Launching GUI...")
-        start_gui()    
-    
+        # Import the GUI start function from EndUser
+        sys.path.insert(0, str(project_root / 'EndUser'))
+        from src.UI.main_gui import start_gui
+        start_gui()
     else:
         logger.error(f"Unknown mode: {args.mode}")
         sys.exit(1)

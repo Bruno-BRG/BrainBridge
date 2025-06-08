@@ -158,6 +158,11 @@ class PylslTab(QWidget):
         self.annotation_status_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
         visualization_layout.addWidget(self.annotation_status_label)
         
+        # Patient status indicator
+        self.patient_status_label = QLabel("Patient: None selected")
+        self.patient_status_label.setStyleSheet("padding: 5px; background-color: #fff3cd; border: 1px solid #ffeaa7; font-weight: bold;")
+        visualization_layout.addWidget(self.patient_status_label)
+        
         visualization_group.setLayout(visualization_layout)
         layout.addWidget(visualization_group)
         
@@ -196,15 +201,19 @@ class PylslTab(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Select Recording Folder")
         if folder:
             self.recording_folder = folder
-            self.selected_folder_label.setText(f"Selected: {folder}")
+            self.selected_folder_label.setText(f"Custom folder: {folder}")
             self.selected_folder_label.setStyleSheet("padding: 5px; background-color: #ccffcc; border: 1px solid #00aa00;")
+            # Reset button text when custom folder is selected
+            self.select_folder_btn.setText("Select Recording Folder")
             # Enable start button if streams are available
             self.refresh_pylsl_streams()
         else:
-            self.recording_folder = None
-            self.selected_folder_label.setText("No folder selected")
-            self.selected_folder_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
-            self.pylsl_start_btn.setEnabled(False)
+            # Only reset if no patient folder is set
+            if not hasattr(self.main_window, 'current_patient_id') or not self.main_window.current_patient_id:
+                self.recording_folder = None
+                self.selected_folder_label.setText("No folder selected")
+                self.selected_folder_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
+                self.pylsl_start_btn.setEnabled(False)
 
     def refresh_pylsl_streams(self):
         """
@@ -229,6 +238,98 @@ class PylslTab(QWidget):
         except Exception as e:
             self.pylsl_info_text.setPlainText(f"Error refreshing streams: {str(e)}")
             self.pylsl_start_btn.setEnabled(False)
+
+    def set_patient_folder(self, patient_id, patient_data):
+        """
+        Set the recording folder automatically based on selected patient.
+        
+        Args:
+            patient_id (str): The ID of the selected patient
+            patient_data (dict): Patient information dictionary
+        """
+        if not patient_id:
+            return
+            
+        # Create patient-specific folder structure
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        patient_folder = os.path.join(project_root, "patient_data", patient_id)
+        
+        # Create organized subfolder structure
+        self._create_patient_folder_structure(patient_folder)
+        
+        # Set EEG recordings as the primary recording folder
+        eeg_recordings_folder = os.path.join(patient_folder, "eeg_recordings")
+        self.recording_folder = eeg_recordings_folder
+        
+        # Update UI elements
+        patient_name = patient_data.get('name', 'Unknown')
+        self.selected_folder_label.setText(f"Patient: {patient_name} ({patient_id}) - EEG Recordings")
+        self.selected_folder_label.setStyleSheet("padding: 5px; background-color: #e6f3ff; border: 1px solid #0066cc;")
+        
+        # Update button text to show it's automatically set
+        self.select_folder_btn.setText("Change Recording Folder")
+        
+        # Update patient status indicator
+        self.patient_status_label.setText(f"Patient: {patient_name} ({patient_id}) - Auto-configured")
+        self.patient_status_label.setStyleSheet("padding: 5px; background-color: #d4edda; border: 1px solid #28a745; font-weight: bold;")
+        
+        # Enable start button if streams are available
+        self.refresh_pylsl_streams()
+        
+        print(f"PylslTab: Auto-configured recording folder for patient {patient_id}: {eeg_recordings_folder}")
+
+    def _create_patient_folder_structure(self, patient_folder):
+        """
+        Create organized folder structure for patient data.
+        
+        Args:
+            patient_folder (str): Base patient folder path
+        """
+        subfolders = [
+            "eeg_recordings",     # Raw EEG CSV files
+            "processed_data",     # Preprocessed data
+            "models",            # Trained models for this patient
+            "reports",           # Analysis reports and visualizations
+            "sessions"           # Session-specific data
+        ]
+        
+        for subfolder in subfolders:
+            folder_path = os.path.join(patient_folder, subfolder)
+            os.makedirs(folder_path, exist_ok=True)
+            
+        print(f"Created patient folder structure: {patient_folder}")
+
+    def clear_patient_folder(self):
+        """
+        Clear the patient-specific folder configuration.
+        This is called when no patient is selected.
+        """
+        self.recording_folder = None
+        self.selected_folder_label.setText("No folder selected")
+        self.selected_folder_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
+        self.select_folder_btn.setText("Select Recording Folder")
+        self.patient_status_label.setText("Patient: None selected")
+        self.patient_status_label.setStyleSheet("padding: 5px; background-color: #fff3cd; border: 1px solid #ffeaa7; font-weight: bold;")
+        self.pylsl_start_btn.setEnabled(False)
+        
+        print("PylslTab: Cleared patient folder configuration")
+
+    def get_patient_status_info(self):
+        """
+        Get information about current patient folder configuration.
+        
+        Returns:
+            dict: Status information about patient configuration
+        """
+        has_patient = (hasattr(self.main_window, 'current_patient_id') and 
+                      self.main_window.current_patient_id)
+        
+        return {
+            'has_patient': has_patient,
+            'patient_id': getattr(self.main_window, 'current_patient_id', None),
+            'recording_folder': self.recording_folder,
+            'folder_type': 'patient' if has_patient and self.recording_folder and 'patient_data' in str(self.recording_folder) else 'custom'
+        }
 
     def start_csv_recording(self, num_channels):
         """Initialize CSV recording with OpenBCI format."""

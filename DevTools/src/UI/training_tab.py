@@ -201,12 +201,6 @@ class TrainingTab(QWidget):
     def update_model_name_config(self, text):
         self.main_window.training_params_config["model_name"] = text
         self.main_window.current_model_name = text # Also update MainWindow's current_model_name
-        layout.addStretch()
-        self.setLayout(layout)
-
-    def update_model_name_config(self, text):
-        self.main_window.training_params_config["model_name"] = text
-        self.main_window.current_model_name = text # Also update MainWindow's current_model_name
 
     def toggle_custom_params_group(self):
         use_custom = self.rb_custom_params.isChecked()
