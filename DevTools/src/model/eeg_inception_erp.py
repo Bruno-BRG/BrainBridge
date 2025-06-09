@@ -11,7 +11,7 @@ Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
 import torch
 import torch.nn as nn
 import os
-from .base_model import Model as BaseModel
+from src.model.base_model import Model as BaseModel
 
 try:
     from braindecode.models import EEGInceptionERP as BraindecodeEEGInceptionERP

@@ -13,7 +13,7 @@ import torch
 from collections import deque
 from typing import Optional, Dict, Any, List, Tuple
 import traceback
-from .EEGFilter import EEGFilter
+from src.model.EEGFilter import EEGFilter
 
 
 class RealTimeInferenceProcessor:

@@ -7,5 +7,14 @@
     "onset_time": "2 months",
     "registration_date": "2025-06-07T17:05:18.488020",
     "model_history": []
+  },
+  "C001": {
+    "name": "Davi",
+    "age": 30,
+    "gender": "Male",
+    "affected_hand": "Left Hand",
+    "onset_time": "6 months",
+    "registration_date": "2025-06-09T14:54:26.057938",
+    "model_history": []
   }
 }

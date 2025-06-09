@@ -14,7 +14,7 @@ import torch.nn as nn
 from typing import Optional, Dict, List, Tuple
 import numpy as np
 from datetime import datetime
-from .eeg_inception_erp import EEGInceptionERPModel
+from src.model.eeg_inception_erp import EEGInceptionERPModel
 from datetime import datetime
 
 

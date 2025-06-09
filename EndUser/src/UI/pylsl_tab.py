@@ -166,15 +166,19 @@ class PylslTab(QWidget):
         visualization_group.setLayout(visualization_layout)
         layout.addWidget(visualization_group)
         
-        layout.addStretch()
-
-        # Initialize PyLSL variables
+        layout.addStretch()        # Initialize PyLSL variables
         self.pylsl_inlet = None
         self.pylsl_buffer = None
         self.pylsl_time_buffer = None
         self.pylsl_timer = QTimer(self)
         self.pylsl_timer.timeout.connect(self.update_pylsl_plot)
         self.current_sample_rate = 125  # Default sample rate
+        
+        # Stream monitoring variables
+        self.last_sample_time = None
+        self.stream_timeout_threshold = 3.0  # seconds
+        self.consecutive_empty_pulls = 0
+        self.max_consecutive_empty_pulls = 10  # ~0.4 seconds at 25fps
           # CSV recording variables
         self.csv_file = None
         self.csv_writer = None
@@ -533,8 +537,8 @@ class PylslTab(QWidget):
                 self.csv_writer = None
                 QMessageBox.information(self, "Recording Stopped", "CSV recording has been saved and stopped.")
             except Exception as e:
-                QMessageBox.critical(self, "Recording Error", f"Error stopping CSV recording: {str(e)}")
-
+                QMessageBox.critical(self, "Recording Error", f"Error stopping CSV recording: {str(e)}")    
+    
     def start_pylsl_stream(self):
         """
         Starts an LSL EEG stream and begins CSV recording.
@@ -553,9 +557,8 @@ class PylslTab(QWidget):
             if not eeg_streams:
                 QMessageBox.warning(self, "No EEG Streams", "No EEG streams found. Make sure your device is streaming.")
                 return
-            
-            # Connect to the first EEG stream found
-            self.pylsl_inlet = StreamInlet(eeg_streams[0], max_buflen=360)
+              # Connect to the first EEG stream found with MINIMAL buffer for instant response
+            self.pylsl_inlet = StreamInlet(eeg_streams[0], max_buflen=8)  # Extremely aggressive: only 8 samples buffer
             info = self.pylsl_inlet.info()
             n_channels = info.channel_count()
             
@@ -567,11 +570,15 @@ class PylslTab(QWidget):
             else:
                 self.current_sample_rate = float(sample_rate)
 
-            # Buffer size set to display 400 samples
-            buffer_size = 400
+            # Reduced buffer size for faster response
+            buffer_size = 250  # Reduced from 400
             
             self.pylsl_buffer = deque(maxlen=buffer_size)
             self.pylsl_time_buffer = deque(maxlen=buffer_size)
+            
+            # Reset stream monitoring variables
+            self.last_sample_time = None
+            self.consecutive_empty_pulls = 0
             
             # Start CSV recording
             self.start_csv_recording(n_channels)
@@ -587,7 +594,8 @@ class PylslTab(QWidget):
             self.record_left_btn.setEnabled(True)
             self.record_right_btn.setEnabled(True)
             
-            self.pylsl_timer.start(int(1000 / 25))  # Target ~25 FPS plot updates
+            # Faster timer for more responsive updates
+            self.pylsl_timer.start(int(1000 / 30))  # Increased to 30 FPS from 25 FPS
             
             QMessageBox.information(self, "Stream Started", 
                                   f"Successfully connected to EEG stream: {info.name()}\\n"
@@ -595,26 +603,50 @@ class PylslTab(QWidget):
                                   f"Sample Rate: {self.current_sample_rate:.2f} Hz\\n"
                                   f"Recording to: {self.recording_folder}")
         except Exception as e:
-            QMessageBox.critical(self, "Stream Error", f"Failed to start stream: {str(e)}\\n{traceback.format_exc()}")
-
+            QMessageBox.critical(self, "Stream Error", f"Failed to start stream: {str(e)}\\n{traceback.format_exc()}")    
+    
     def stop_pylsl_stream(self):
         """
         Stops the currently active LSL stream and CSV recording.
+        Includes aggressive buffer clearing for faster response.
         """
         try:
             self.pylsl_timer.stop()
-              # Stop CSV recording first
+            
+            # Aggressively clear any remaining buffered data
+            if self.pylsl_inlet:
+                try:
+                    # Flush any remaining data in the inlet with short timeout
+                    remaining_samples, _ = self.pylsl_inlet.pull_chunk(timeout=0.1, max_samples=1000)
+                    if remaining_samples:
+                        print(f"Flushed {len(remaining_samples)} remaining samples from inlet buffer")
+                except:
+                    pass  # Ignore errors during flush
+            
+            # Stop CSV recording first
             self.stop_csv_recording()
             
             if self.pylsl_inlet:
                 self.pylsl_inlet.close_stream()
             self.pylsl_inlet = None
+            
+            # Clear buffers immediately
+            if self.pylsl_buffer:
+                self.pylsl_buffer.clear()
+            if self.pylsl_time_buffer:
+                self.pylsl_time_buffer.clear()
             self.pylsl_buffer = None
             self.pylsl_time_buffer = None
-              # Reset annotation tracking
+            
+            # Reset stream monitoring variables
+            self.last_sample_time = None
+            self.consecutive_empty_pulls = 0
+            
+            # Reset annotation tracking
             self.current_annotation = ""
             self.annotation_samples_remaining = 0
             self.add_t0_next_sample = False
+            
             self.pylsl_status_label.setText("Status: Disconnected")
             self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ffcccc;")
             
@@ -636,15 +668,24 @@ class PylslTab(QWidget):
     def update_pylsl_plot(self):
         """
         Pulls new data from the LSL stream, updates the plot, and writes to CSV.
+        Includes automatic stream timeout detection for faster response when stream stops.
         """
         if not self.pylsl_inlet or self.pylsl_buffer is None:
             return
         try:
-            # Pull samples
+            # Pull samples with short timeout for faster response
             samples_to_pull = int(self.current_sample_rate * (self.pylsl_timer.interval() / 1000.0))
-            samples, timestamps = self.pylsl_inlet.pull_chunk(timeout=0.0, max_samples=max(1, samples_to_pull))
+            # Use very short timeout to prevent blocking
+            samples, timestamps = self.pylsl_inlet.pull_chunk(timeout=0.01, max_samples=max(1, samples_to_pull))
+            
+            import time
+            current_time = time.time()
             
             if samples:
+                # Reset empty pull counter when we get data
+                self.consecutive_empty_pulls = 0
+                self.last_sample_time = current_time
+                
                 # Add to buffer for visualization
                 for sample_group in samples:
                     self.pylsl_buffer.append(sample_group)
@@ -655,8 +696,43 @@ class PylslTab(QWidget):
                 # Update visualization
                 self._update_visualization_plot()
                 
+                # Update status to show active streaming
+                if "Recording" in self.pylsl_status_label.text():
+                    self.pylsl_status_label.setText("Status: Connected & Recording")
+                    self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ccffcc;")
+                
+            else:
+                # No samples received - check for stream timeout
+                self.consecutive_empty_pulls += 1
+                
+                # Check if stream has timed out
+                stream_timed_out = False
+                if self.last_sample_time is not None:
+                    time_since_last_sample = current_time - self.last_sample_time
+                    if time_since_last_sample > self.stream_timeout_threshold:
+                        stream_timed_out = True
+                
+                # Update status based on timeout conditions
+                if stream_timed_out or self.consecutive_empty_pulls > self.max_consecutive_empty_pulls:
+                    if "No data" not in self.pylsl_status_label.text():
+                        self.pylsl_status_label.setText("Status: Connected but no data received")
+                        self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ffffcc; border: 1px solid #ffaa00;")
+                        print(f"Stream timeout detected - no data for {time_since_last_sample:.1f}s")
+                
+                # If no data for very long time, offer to stop automatically
+                if self.last_sample_time is not None:
+                    time_since_last_sample = current_time - self.last_sample_time
+                    if time_since_last_sample > 10.0:  # 10 seconds without data
+                        self.pylsl_status_label.setText("Status: Stream appears disconnected - consider stopping")
+                        self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ffdddd; border: 1px solid #ff6666;")
+                
         except Exception as e:
             print(f"DEBUG: Plot update error: {e}")
+            # Check if it's a stream-related error that suggests disconnection
+            error_str = str(e).lower()
+            if any(keyword in error_str for keyword in ['timeout', 'connection', 'stream', 'inlet']):
+                self.pylsl_status_label.setText("Status: Stream error detected")
+                self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ffcccc; border: 1px solid #ff0000;")
             traceback.print_exc()
 
     def _update_visualization_plot(self):

@@ -46,11 +46,11 @@ import time
 from datetime import datetime
 
 # Import tab classes
-from .data_management_tab import DataManagementTab
-from .training_tab import TrainingTab # TrainingThread is imported within TrainingTab or used by it.
-from .pylsl_tab import PylslTab # Import PylslTab
-from .fine_tuning_tab import FineTuningTab # Import FineTuningTab
-from .plot_canvas import PlotCanvas # Import PlotCanvas, TrainingPlotCanvas is in plot_canvas.py too but not directly used in main_gui anymore
+from src.UI.data_management_tab import DataManagementTab
+from src.UI.training_tab import TrainingTab
+from src.UI.pylsl_tab import PylslTab
+from src.UI.fine_tuning_tab import FineTuningTab
+from src.UI.plot_canvas import PlotCanvas
 
 
 class MainWindow(QMainWindow):

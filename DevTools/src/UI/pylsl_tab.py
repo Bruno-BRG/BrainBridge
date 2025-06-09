@@ -452,9 +452,8 @@ class PylslTab(QWidget):
             if not eeg_streams:
                 QMessageBox.warning(self, "No EEG Streams", "No EEG streams found. Make sure your device is streaming.")
                 return
-            
-            # Connect to the first EEG stream found
-            self.pylsl_inlet = StreamInlet(eeg_streams[0], max_buflen=360)
+              # Connect to the first EEG stream found with MINIMAL buffer for instant response
+            self.pylsl_inlet = StreamInlet(eeg_streams[0], max_buflen=8)  # Extremely aggressive: only 8 samples buffer
             info = self.pylsl_inlet.info()
             n_channels = info.channel_count()
             
@@ -466,11 +465,15 @@ class PylslTab(QWidget):
             else:
                 self.current_sample_rate = float(sample_rate)
 
-            # Buffer size set to display 400 samples
-            buffer_size = 400
+            # Reduced buffer size for faster response
+            buffer_size = 250  # Reduced from 400
             
             self.pylsl_buffer = deque(maxlen=buffer_size)
             self.pylsl_time_buffer = deque(maxlen=buffer_size)
+            
+            # Reset stream monitoring variables
+            self.last_sample_time = None
+            self.consecutive_empty_pulls = 0
             
             # Start CSV recording
             self.start_csv_recording(n_channels)
@@ -486,7 +489,8 @@ class PylslTab(QWidget):
             self.record_left_btn.setEnabled(True)
             self.record_right_btn.setEnabled(True)
             
-            self.pylsl_timer.start(int(1000 / 25))  # Target ~25 FPS plot updates
+            # Faster timer for more responsive updates
+            self.pylsl_timer.start(int(1000 / 30))  # Increased to 30 FPS from 25 FPS
             
             QMessageBox.information(self, "Stream Started", 
                                   f"Successfully connected to EEG stream: {info.name()}\\n"
