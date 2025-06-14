@@ -515,7 +515,7 @@ class FineTuningTab(QWidget):
                             model_options.append(f"{subdir}/{file}")
         
         if not model_options:
-            model_options = ["models\coisa2\eeginceptionerp_fold_final.pth"]
+            model_options = ["models\Modelo_generalizado\eeginceptionerp_fold_final.pth"]
         
         self.model_combo.addItems(model_options)
     
