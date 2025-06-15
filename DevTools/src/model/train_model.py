@@ -313,11 +313,15 @@ def main(
     # os.makedirs(model_specific_path, exist_ok=True) # Create the directory for this model name
 
     if subjects_to_use is None:
-        subjects_list = list(range(1, 11)) # Default to first 10 subjects
-        print("No subjects specified, defaulting to subjects 1-10.")
+        # Get all available subjects from the data loader instead of defaulting to 1-10
+        data_loader_temp = BCIDataLoader(data_base_path)
+        subjects_list = data_loader_temp.get_available_subjects()
+        print(f"No subjects specified, using all available subjects: {len(subjects_list)} subjects found")
     elif isinstance(subjects_to_use, str) and subjects_to_use.lower() == 'all':
-        subjects_list = None # BCIDataLoader handles None as all subjects
-        print("Using all available subjects.")
+        # Get all available subjects from the data loader
+        data_loader_temp = BCIDataLoader(data_base_path)
+        subjects_list = data_loader_temp.get_available_subjects()
+        print(f"Using all available subjects: {len(subjects_list)} subjects found")
     elif isinstance(subjects_to_use, list):
         subjects_list = subjects_to_use
         print(f"Using specified subjects: {subjects_list}")

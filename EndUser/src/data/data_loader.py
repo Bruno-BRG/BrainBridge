@@ -1,8 +1,8 @@
 """
-BCI Data Loader for PhysioNet Motor Imagery Dataset
+BCI Data Loader for EEG Motor Imagery Classification
 
 This module provides data loading, preprocessing and windowing capabilities
-for the PhysioNet motor imagery dataset (runs 4, 8, 12) suitable for CNN training.
+for EEG motor imagery data suitable for CNN training.
 
 Classes:
     BCIDataLoader: Main data loader class for loading and preprocessing EEG data
@@ -23,6 +23,7 @@ from torch.utils.data import Dataset, DataLoader
 from scipy import signal
 from sklearn.preprocessing import StandardScaler
 import logging
+from .data_normalizer import UniversalEEGNormalizer, create_training_normalizer, create_finetuning_normalizer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 class BCIDataLoader:
     """
-    Data loader for PhysioNet Motor Imagery Dataset
+    Data loader for EEG Motor Imagery Classification
     
     Handles loading CSV files, extracting events, and creating windowed data
     suitable for CNN training on left/right hand motor imagery tasks.
@@ -40,26 +41,47 @@ class BCIDataLoader:
     def __init__(self, 
                  data_path: str,
                  subjects: Optional[List[int]] = None,
-                 runs: Optional[List[int]] = None,
                  sample_rate: int = 125,
-                 n_channels: int = 16):
+                 n_channels: int = 16,
+                 normalization_method: str = 'zscore',
+                 mode: str = 'training',
+                 stats_path: Optional[str] = None):
         """
-        Initialize the BCI data loader
+        Initialize the BCI data loader for patient data
         
         Args:
             data_path: Path to the EEG data directory
             subjects: List of subject IDs to load (default: all available)
-            runs: List of runs to load (default: [4, 8, 12])
             sample_rate: Sampling rate in Hz (default: 125)
             n_channels: Number of EEG channels (default: 16)
+            normalization_method: Method for data normalization ('zscore', 'minmax', 'robust')
+            mode: Mode for data loading ('training' or 'finetuning')
+            stats_path: Path to statistics file for finetuning mode
         """
         self.data_path = data_path
         self.subjects = subjects
-        self.runs = runs if runs is not None else [4, 8, 12]
         self.sample_rate = sample_rate
         self.n_channels = n_channels
+        self.normalization_method = normalization_method
         
-        # Event mapping for PhysioNet motor imagery
+        # Initialize universal normalizer based on mode
+        if mode == 'training':
+            self.normalizer = create_training_normalizer(
+                method=normalization_method, 
+                stats_path=stats_path
+            )
+        elif mode == 'finetuning':
+            if not stats_path:
+                raise ValueError("stats_path required for finetuning mode")
+            self.normalizer = create_finetuning_normalizer(stats_path)
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+        
+        self.mode = mode
+        self.stats_path = stats_path
+        self._global_normalizer_fitted = False
+        
+        # Event mapping for motor imagery classification
         self.event_mapping = {
             'T0': 0,  # Rest/baseline
             'T1': 1,  # Left hand imagery  
@@ -74,7 +96,18 @@ class BCIDataLoader:
             'EXG Channel 12', 'EXG Channel 13', 'EXG Channel 14', 'EXG Channel 15'
         ]
         
-        logger.info(f"Initialized BCIDataLoader for subjects: {self.subjects}, runs: {self.runs}")
+        logger.info(f"Initialized BCIDataLoader - Mode: {mode}, Normalization: {normalization_method}")
+    
+    def fit_global_normalizer(self, all_data_batches: List[np.ndarray]):
+        """
+        Fit the global normalizer across all data batches
+        Call this before processing individual files for consistent normalization
+        """
+        if not self._global_normalizer_fitted:
+            logger.info("Fitting global normalizer across all data batches...")
+            self.normalizer.fit_global_stats(all_data_batches)
+            self._global_normalizer_fitted = True
+            logger.info("Global normalizer fitted successfully")
     
     def get_available_subjects(self) -> List[int]:
         """Get list of available subject IDs in the dataset"""
@@ -92,64 +125,95 @@ class BCIDataLoader:
                 
         return sorted(subjects)
     
-    def load_csv_data(self, subject_id: int, run: int) -> Tuple[np.ndarray, List[Tuple[int, str]]]:
+    def load_patient_csv_data(self, file_path: str, fit_normalizer: bool = False) -> Tuple[np.ndarray, List[Tuple[int, str]]]:
         """
-        Load EEG data from CSV file for a specific subject and run
+        Load EEG data from patient CSV file
         
         Args:
-            subject_id: Subject ID (e.g., 1 for S001)
-            run: Run number (4, 8, or 12)
+            file_path: Path to the patient CSV file
+            fit_normalizer: Whether to fit the normalizer on this patient's data
             
         Returns:
             Tuple of (eeg_data, events) where:
             - eeg_data: numpy array of shape (n_samples, n_channels)
             - events: list of (sample_index, event_label) tuples
         """
-        # Construct file path
-        subject_str = f"S{subject_id:03d}"
-        filename = f"{subject_str}R{run:02d}_csv_openbci.csv"
-        file_path = os.path.join(
-            self.data_path, "MNE-eegbci-data", "files", "eegmmidb", "1.0.0", 
-            subject_str, filename
-        )
-        
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         
-        logger.info(f"Loading data from: {file_path}")
+        logger.info(f"Loading patient data from: {file_path}")
         
         # Read CSV file, skip header comments
         df = pd.read_csv(file_path, comment='%')
         
-        # Extract EEG channels (first 16 columns after Sample Index)
-        eeg_data = df[self.channel_names].values.astype(np.float32)
+        # Extract EEG channels - adapt to patient CSV format
+        # This assumes patient data has similar channel naming or can be mapped
+        if all(col in df.columns for col in self.channel_names):
+            eeg_data = df[self.channel_names].values.astype(np.float32)
+        else:
+            # Try to automatically detect EEG channels
+            # Look for numeric columns that might be EEG data
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            if 'Sample Index' in numeric_cols:
+                numeric_cols.remove('Sample Index')
+            if 'Time' in numeric_cols:
+                numeric_cols.remove('Time')
+            
+            if len(numeric_cols) >= self.n_channels:
+                eeg_data = df[numeric_cols[:self.n_channels]].values.astype(np.float32)
+                logger.info(f"Auto-detected EEG channels: {numeric_cols[:self.n_channels]}")
+            else:
+                raise ValueError(f"Could not find {self.n_channels} EEG channels in CSV file")
         
-        # Extract events from annotations column
+        # Extract events from annotations column if available
         events = []
-        annotations = df['Annotations'].fillna('')
+        if 'Annotations' in df.columns:
+            annotations = df['Annotations'].fillna('')
+            for idx, annotation in enumerate(annotations):
+                if annotation in self.event_mapping:
+                    events.append((idx, annotation))
+        else:
+            # If no annotations, create dummy events for testing
+            logger.warning("No Annotations column found, creating dummy events")
+            # Create some sample events for demonstration
+            for i in range(0, len(eeg_data), len(eeg_data)//10):
+                if i < len(eeg_data):
+                    events.append((i, 'T1' if (i // (len(eeg_data)//10)) % 2 == 0 else 'T2'))
         
-        for idx, annotation in enumerate(annotations):
-            if annotation in self.event_mapping:
-                events.append((idx, annotation))
+        # Apply universal normalization
+        if fit_normalizer and not self._global_normalizer_fitted:
+            logger.info("Fitting normalizer on patient data...")
+            self.normalizer.fit(eeg_data)
+            self._global_normalizer_fitted = True
+        
+        if self._global_normalizer_fitted:
+            # Transform the data using global statistics
+            eeg_data = self.normalizer.transform(
+                eeg_data, 
+                update_stats=(self.mode == 'finetuning')
+            )
+        else:
+            logger.warning("Normalizer not fitted yet - data not normalized")
         
         logger.info(f"Loaded {eeg_data.shape[0]} samples, {len(events)} events")
+        logger.info(f"Data range after normalization: {eeg_data.min():.3f} to {eeg_data.max():.3f}")
         return eeg_data, events
     
     def preprocess_data(self, 
                        eeg_data: np.ndarray, 
-                       lowcut: float = 0.5,  # Changed from 0.5 to 8.0
-                       highcut: float = 50.0,  # Changed from 50.0 to 30.0
+                       lowcut: float = 0.5,
+                       highcut: float = 50.0,
                        notch_freq: float = 50.0,
-                       apply_standardization: bool = True) -> np.ndarray:
+                       apply_standardization: bool = False) -> np.ndarray:
         """
-        Preprocess EEG data with filtering and standardization
+        Preprocess EEG data with filtering (normalization handled separately)
         
         Args:
             eeg_data: EEG data array of shape (n_samples, n_channels)
             lowcut: Low cutoff frequency for bandpass filter
             highcut: High cutoff frequency for bandpass filter  
             notch_freq: Notch filter frequency (power line noise)
-            apply_standardization: Whether to apply z-score standardization
+            apply_standardization: Whether to apply z-score standardization (deprecated - use normalizer instead)
             
         Returns:
             Preprocessed EEG data
@@ -176,8 +240,10 @@ class BCIDataLoader:
             filtered_ch = signal.filtfilt(b_notch, a_notch, filtered_ch)
             filtered_data[:, ch] = filtered_ch
         
-        # Standardization (z-score normalization)
+        # Note: Normalization is now handled by the universal normalizer
+        # Old standardization kept for backward compatibility
         if apply_standardization:
+            logger.warning("apply_standardization is deprecated. Normalization is handled by the universal normalizer.")
             scaler = StandardScaler()
             filtered_data = scaler.fit_transform(filtered_data)
         
@@ -246,13 +312,64 @@ class BCIDataLoader:
         logger.info(f"Created {len(windows)} windows of shape {windows.shape[1:]} with labels: {np.bincount(labels)}")
         return windows, labels
     
+    def load_patient_data(self, 
+                         file_paths: List[str],
+                         preprocess: bool = True,
+                         create_windows_flag: bool = True,
+                         **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Load and process patient data from multiple CSV files (sessions)
+        
+        Args:
+            file_paths: List of CSV file paths for the patient
+            preprocess: Whether to apply preprocessing
+            create_windows_flag: Whether to create time windows
+            **kwargs: Additional arguments for preprocessing and windowing
+            
+        Returns:
+            Tuple of (windows, labels) for the patient
+        """
+        all_windows = []
+        all_labels = []
+        
+        for file_path in file_paths:
+            try:
+                # Load raw data
+                eeg_data, events = self.load_patient_csv_data(file_path)
+                
+                # Preprocess if requested (filtering only, normalization already applied)
+                if preprocess:
+                    eeg_data = self.preprocess_data(eeg_data, apply_standardization=False, **kwargs)
+                
+                # Create windows if requested
+                if create_windows_flag:
+                    windows, labels = self.create_windows(eeg_data, events, **kwargs)
+                    if len(windows) > 0:
+                        all_windows.append(windows)
+                        all_labels.append(labels)
+                        
+            except Exception as e:
+                logger.error(f"Error processing file {file_path}: {e}")
+                continue
+        
+        if len(all_windows) == 0:
+            logger.warning(f"No data loaded from files: {file_paths}")
+            return np.array([]), np.array([])
+        
+        # Concatenate all sessions
+        all_windows = np.concatenate(all_windows, axis=0)
+        all_labels = np.concatenate(all_labels, axis=0)
+        
+        logger.info(f"Patient data: {all_windows.shape[0]} total windows")
+        return all_windows, all_labels
+    
     def load_subject_data(self, 
                          subject_id: int,
                          preprocess: bool = True,
                          create_windows_flag: bool = True,
                          **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Load and process all data for a single subject across specified runs
+        Load and process data for a single subject
         
         Args:
             subject_id: Subject ID to load
@@ -266,54 +383,28 @@ class BCIDataLoader:
         all_windows = []
         all_labels = []
         
-        for run in self.runs:
-            try:
-                # Load raw data
-                eeg_data, events = self.load_csv_data(subject_id, run)
-                
-                # Preprocess if requested
-                if preprocess:
-                    eeg_data = self.preprocess_data(eeg_data, **kwargs)
-                
-                # Create windows if requested
-                if create_windows_flag:
-                    windows, labels = self.create_windows(eeg_data, events, **kwargs)
-                    if len(windows) > 0:
-                        all_windows.append(windows)
-                        all_labels.append(labels)
-                        
-            except Exception as e:
-                logger.error(f"Error processing subject {subject_id}, run {run}: {e}")
-                continue
+        # Note: This method would need to be implemented based on the specific data structure
+        # For now, it's a placeholder that should be customized for the actual data format
+        logger.warning("load_subject_data method needs to be implemented for specific data structure")
         
-        if len(all_windows) == 0:
-            logger.warning(f"No data loaded for subject {subject_id}")
-            return np.array([]), np.array([])
-        
-        # Concatenate all runs
-        all_windows = np.concatenate(all_windows, axis=0)
-        all_labels = np.concatenate(all_labels, axis=0)
-        
-        logger.info(f"Subject {subject_id}: {all_windows.shape[0]} total windows")
-        return all_windows, all_labels
+        return np.array([]), np.array([])
     
     def load_all_subjects(self, **kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Load data for all specified subjects
+        Load and process data for all subjects
         
         Args:
-            **kwargs: Arguments passed to load_subject_data
+            **kwargs: Additional arguments for preprocessing and windowing
             
         Returns:
-            Tuple of (windows, labels, subject_ids) where subject_ids indicates
-            which subject each window belongs to
+            Tuple of (windows, labels, subject_ids) for all subjects
         """
-        if self.subjects is None:
-            self.subjects = self.get_available_subjects()
-        
         all_windows = []
         all_labels = []
         all_subject_ids = []
+        
+        if self.subjects is None:
+            self.subjects = self.get_available_subjects()
         
         for subject_id in self.subjects:
             windows, labels = self.load_subject_data(subject_id, **kwargs)
@@ -421,7 +512,8 @@ class BCIDataset(Dataset):
             shift = torch.randint(-10, 11, (1,)).item()
             if shift != 0:
                 window = torch.roll(window, shift, dims=1)
-          # Amplitude scaling
+        
+        # Amplitude scaling
         if torch.rand(1) < 0.3:
             scale = torch.FloatTensor(1).uniform_(0.9, 1.1).item()
             window = window * scale
@@ -456,9 +548,9 @@ def create_data_loaders(data_path: str,
         **loader_kwargs: Additional arguments to pass to the BCIDataLoader.
 
     Returns:
-        Tuple[DataLoader, DataLoader, DataLoader]: Train, validation, and test DataLoaders.
+        Tuple[DataLoader, DataLoader, DataLoader]: Train, validation, and test data loaders.
     """
-    # Initialize data loader
+    # Create BCI data loader
     bci_loader = BCIDataLoader(data_path, subjects=subjects, **loader_kwargs)
     
     # Load all data

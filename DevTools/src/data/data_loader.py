@@ -23,6 +23,7 @@ from torch.utils.data import Dataset, DataLoader
 from scipy import signal
 from sklearn.preprocessing import StandardScaler
 import logging
+from .data_normalizer import UniversalEEGNormalizer, create_training_normalizer, create_finetuning_normalizer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,36 +37,42 @@ class BCIDataLoader:
     Handles loading CSV files, extracting events, and creating windowed data
     suitable for CNN training on left/right hand motor imagery tasks.
     """
-    
     def __init__(self, 
                  data_path: str,
                  subjects: Optional[List[int]] = None,
                  runs: Optional[List[int]] = None,
                  sample_rate: int = 125,
-                 n_channels: int = 16):
+                 n_channels: int = 16,
+                 normalization_method: str = 'zscore'):
         """
         Initialize the BCI data loader
-        
+
         Args:
             data_path: Path to the EEG data directory
             subjects: List of subject IDs to load (default: all available)
             runs: List of runs to load (default: [4, 8, 12])
             sample_rate: Sampling rate in Hz (default: 125)
             n_channels: Number of EEG channels (default: 16)
+            normalization_method: Method for data normalization ('zscore', 'minmax', 'robust')
         """
         self.data_path = data_path
         self.subjects = subjects
         self.runs = runs if runs is not None else [4, 8, 12]
         self.sample_rate = sample_rate
         self.n_channels = n_channels
-        
+        self.normalization_method = normalization_method
+
+        # Initialize normalizer
+        self.normalizer = create_training_normalizer(method=normalization_method)
+        self._normalizer_fitted = False
+
         # Event mapping for PhysioNet motor imagery
         self.event_mapping = {
             'T0': 0,  # Rest/baseline
             'T1': 1,  # Left hand imagery  
             'T2': 2   # Right hand imagery
         }
-        
+
         # EEG channel names (standard 10-20 system for first 16 channels)
         self.channel_names = [
             'EXG Channel 0', 'EXG Channel 1', 'EXG Channel 2', 'EXG Channel 3',
@@ -73,7 +80,7 @@ class BCIDataLoader:
             'EXG Channel 8', 'EXG Channel 9', 'EXG Channel 10', 'EXG Channel 11',
             'EXG Channel 12', 'EXG Channel 13', 'EXG Channel 14', 'EXG Channel 15'
         ]
-        
+
         logger.info(f"Initialized BCIDataLoader for subjects: {self.subjects}, runs: {self.runs}")
     
     def get_available_subjects(self) -> List[int]:

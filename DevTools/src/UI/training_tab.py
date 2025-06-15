@@ -43,9 +43,10 @@ class TrainingThread(QThread):
             
             subjects_to_use_str = self.training_params.get("train_subject_ids", "all")
             
-            subjects_to_use_str = self.training_params.get("train_subject_ids", "all")
             subjects_to_use = None
-            if subjects_to_use_str.lower() != "all":
+            if subjects_to_use_str.lower() == "all":
+                subjects_to_use = "all"  # Pass "all" as string instead of None
+            else:
                 try:
                     subjects_to_use = [int(s.strip()) for s in subjects_to_use_str.split(',') if s.strip()]
                 except ValueError:
