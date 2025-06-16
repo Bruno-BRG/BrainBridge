@@ -688,4 +688,101 @@ class PatientDataManager:
         
         return windows, labels
 
-    # ...existing code...
+    def prepare_patient_data(self, patient_data_path: str,
+                         validation_split: float = 0.2,
+                         preprocessing_params: Optional[Dict[str, any]] = None
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, Dict[str, any]]:
+        """
+        Prepare patient data for fine-tuning: load recordings, split, and create DataLoaders.
+        
+        Args:
+            patient_data_path: Path to the patient data directory
+            validation_split: Fraction of data to use for validation
+            preprocessing_params: Optional preprocessing parameters
+            
+        Returns:
+            Tuple of (train_loader, val_loader, metadata)
+        """
+        from src.data.data_normalizer import create_universal_normalizer
+        normalizer = create_universal_normalizer(method='zscore', mode='training', stats_path="global_stats.json")
+        
+        # Load patient recordings
+        all_data, all_labels = self.load_patient_recordings(None, preprocessing_params)
+        
+        # Split data (stratified)
+        X_train, X_val, y_train, y_val = train_test_split(
+            all_data, all_labels, 
+            test_size=validation_split, 
+            stratify=all_labels, 
+            random_state=42
+        )
+        
+        combined = np.concatenate([X_train, X_val])
+        combined = normalizer.fit_transform(combined)
+        
+        # Debug: Save normalized fine tuning data as CSV for inspection
+        import os, pandas as pd
+        debug_folder = os.path.join("debug", "normalized_finetuning")
+        os.makedirs(debug_folder, exist_ok=True)
+        combined_flat = combined.reshape(combined.shape[0], -1)
+        pd.DataFrame(combined_flat).to_csv(os.path.join(debug_folder, "normalized_combined_finetuning.csv"), index=False)
+        
+        train_length = len(X_train)
+        X_train_norm = combined[:train_length]
+        X_val_norm = combined[train_length:]
+        
+        # Create PyTorch datasets
+        train_dataset = BCIDataset(
+            data=torch.FloatTensor(X_train_norm),
+            labels=torch.LongTensor(y_train)
+        )
+        
+        val_dataset = BCIDataset(
+            data=torch.FloatTensor(X_val_norm),
+            labels=torch.LongTensor(y_val)
+        )
+        
+        # Create DataLoaders
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=32,
+            shuffle=True,
+            drop_last=True
+        )
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=32,
+            shuffle=False,
+            drop_last=False
+        )
+        
+        # Metadata summary
+        metadata = {
+            'total_samples': len(all_data),
+            'train_samples': len(X_train),
+            'val_samples': len(X_val),
+            'n_channels': preprocessing_params.get('n_channels', 16),
+            'sample_rate': preprocessing_params.get('sample_rate', 125),
+            'window_length': preprocessing_params.get('window_length', 3.2),
+            'baseline_length': preprocessing_params.get('baseline_length', 1.0),
+            'overlap': preprocessing_params.get('overlap', 0.5),
+            'label_distribution': {
+                'train': np.bincount(y_train).tolist(),
+                'val': np.bincount(y_val).tolist()
+            }
+        }
+        
+        if self.verbose:
+            print(f"Prepared patient data: {metadata['total_samples']} total samples")
+            print(f"  - Training: {metadata['train_samples']} samples")
+            print(f"  - Validation: {metadata['val_samples']} samples")
+            print(f"  - Channels: {metadata['n_channels']}")
+            print(f"  - Sample rate: {metadata['sample_rate']} Hz")
+            print(f"  - Window length: {metadata['window_length']} s")
+            print(f"  - Baseline length: {metadata['baseline_length']} s")
+            print(f"  - Overlap: {metadata['overlap']}")
+            print(f"  - Training label distribution: {metadata['label_distribution']['train']}")
+            print(f"  - Validation label distribution: {metadata['label_distribution']['val']}")
+        
+        return train_loader, val_loader, metadata

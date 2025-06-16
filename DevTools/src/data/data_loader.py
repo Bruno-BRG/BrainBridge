@@ -23,7 +23,7 @@ from torch.utils.data import Dataset, DataLoader
 from scipy import signal
 from sklearn.preprocessing import StandardScaler
 import logging
-from .data_normalizer import UniversalEEGNormalizer, create_training_normalizer, create_finetuning_normalizer
+from .data_normalizer import UniversalEEGNormalizer, create_universal_normalizer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -63,7 +63,7 @@ class BCIDataLoader:
         self.normalization_method = normalization_method
 
         # Initialize normalizer
-        self.normalizer = create_training_normalizer(method=normalization_method)
+        self.normalizer = create_universal_normalizer(method=normalization_method, mode='training')
         self._normalizer_fitted = False
 
         # Event mapping for PhysioNet motor imagery
@@ -185,8 +185,7 @@ class BCIDataLoader:
         
         # Standardization (z-score normalization)
         if apply_standardization:
-            scaler = StandardScaler()
-            filtered_data = scaler.fit_transform(filtered_data)
+            filtered_data = self.normalizer.fit_transform(filtered_data)
         
         logger.info("Preprocessing completed")
         return filtered_data.astype(np.float32)

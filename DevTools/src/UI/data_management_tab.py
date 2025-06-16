@@ -73,7 +73,7 @@ class DataManagementTab(QWidget):
 
         nav_layout = QHBoxLayout()
         self.btn_prev_sample = QPushButton("Previous Sample")
-        self.btn_prev_sample.clicked.connect(self.previous_sample)
+        # self.btn_prev_sample.clicked.connect(self.previous_sample) # Removed connection to deleted method
         self.btn_prev_sample.setEnabled(False)
         nav_layout.addWidget(self.btn_prev_sample)
 
@@ -82,7 +82,7 @@ class DataManagementTab(QWidget):
         nav_layout.addWidget(self.current_sample_label)
 
         self.btn_next_sample = QPushButton("Next Sample")
-        self.btn_next_sample.clicked.connect(self.next_sample)
+        # self.btn_next_sample.clicked.connect(self.next_sample) # Removed connection to deleted method
         self.btn_next_sample.setEnabled(False)
         nav_layout.addWidget(self.btn_next_sample)
         plot_layout.addLayout(nav_layout)
@@ -227,16 +227,3 @@ class DataManagementTab(QWidget):
             self.current_sample_label.setText("Sample: -/-")
             self.btn_prev_sample.setEnabled(False)
             self.btn_next_sample.setEnabled(False)
-
-    def next_sample(self):
-        if self.main_window.data_cache["windows"] is not None:
-            num_samples = len(self.main_window.data_cache["windows"])
-            if self.main_window.data_cache["current_plot_index"] < num_samples - 1:
-                self.main_window.data_cache["current_plot_index"] += 1
-                self.update_plot()
-
-    def previous_sample(self):
-        if self.main_window.data_cache["windows"] is not None:
-            if self.main_window.data_cache["current_plot_index"] > 0:
-                self.main_window.data_cache["current_plot_index"] -= 1
-                self.update_plot()

@@ -294,163 +294,182 @@ def main(
         RuntimeError: If no data is loaded (e.g., `windows.size == 0`).
         # Other exceptions can be raised by underlying functions (data loading, model training).
     """
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    try:
+        # Set device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
 
-    model_params = {}
-    if model_params_json:
-        try:
-            import json
-            model_params = json.loads(model_params_json)
-            print(f"Using model parameters from JSON: {model_params}")
-        except json.JSONDecodeError as e:
-            print(f"Warning: Could not parse model_params_json: {e}. Using default model parameters.")
+        model_params = {}
+        if model_params_json:
+            try:
+                import json
+                model_params = json.loads(model_params_json)
+                print(f"Using model parameters from JSON: {model_params}")
+            except json.JSONDecodeError as e:
+                print(f"Warning: Could not parse model_params_json: {e}. Using default model parameters.")
 
-    # Define the base path for saving models and plots for this run
-    current_model_base_path = "models" # Base directory for all models
-    # model_specific_path = os.path.join(current_model_base_path, model_name) # Path for this specific model run
-    # os.makedirs(model_specific_path, exist_ok=True) # Create the directory for this model name
+        # Define the base path for saving models and plots for this run
+        current_model_base_path = "models" # Base directory for all models
+        # model_specific_path = os.path.join(current_model_base_path, model_name) # Path for this specific model run
+        # os.makedirs(model_specific_path, exist_ok=True) # Create the directory for this model name
 
-    if subjects_to_use is None:
-        # Get all available subjects from the data loader instead of defaulting to 1-10
-        data_loader_temp = BCIDataLoader(data_base_path)
-        subjects_list = data_loader_temp.get_available_subjects()
-        print(f"No subjects specified, using all available subjects: {len(subjects_list)} subjects found")
-    elif isinstance(subjects_to_use, str) and subjects_to_use.lower() == 'all':
-        # Get all available subjects from the data loader
-        data_loader_temp = BCIDataLoader(data_base_path)
-        subjects_list = data_loader_temp.get_available_subjects()
-        print(f"Using all available subjects: {len(subjects_list)} subjects found")
-    elif isinstance(subjects_to_use, list):
-        subjects_list = subjects_to_use
-        print(f"Using specified subjects: {subjects_list}")
-    else:
-        raise ValueError("subjects_to_use must be a list of integers, 'all', or None.")
+        if subjects_to_use is None:
+            # Get all available subjects from the data loader instead of defaulting to 1-10
+            data_loader_temp = BCIDataLoader(data_base_path)
+            subjects_list = data_loader_temp.get_available_subjects()
+            print(f"No subjects specified, using all available subjects: {len(subjects_list)} subjects found")
+        elif isinstance(subjects_to_use, str) and subjects_to_use.lower() == 'all':
+            # Get all available subjects from the data loader
+            data_loader_temp = BCIDataLoader(data_base_path)
+            subjects_list = data_loader_temp.get_available_subjects()
+            print(f"Using all available subjects: {len(subjects_list)} subjects found")
+        elif isinstance(subjects_to_use, list):
+            subjects_list = subjects_to_use
+            print(f"Using specified subjects: {subjects_list}")
+        else:
+            raise ValueError("subjects_to_use must be a list of integers, 'all', or None.")
 
-    if runs_to_include is None:
-        runs_to_include = [4, 8, 12] # Default motor imagery runs
+        if runs_to_include is None:
+            runs_to_include = [4, 8, 12] # Default motor imagery runs
 
-    # Load data
-    data_loader = BCIDataLoader(
-        data_path=data_base_path, # Use data_base_path parameter
-        subjects=subjects_list,
-        runs=runs_to_include  # Use runs_to_include parameter
-    )
-    
-    windows, labels, subject_ids = data_loader.load_all_subjects()
-
-    if windows.size == 0:
-        print("No data loaded. Exiting training.")
-        # Consider raising an error or returning a specific status
-        raise RuntimeError("No data loaded from BCIDataLoader. Cannot proceed with training.")
-    
-    print(f"Data loaded. Shapes: Windows-{windows.shape}, Labels-{labels.shape}, Subject IDs-{subject_ids.shape}")
-    print(f"Unique labels: {np.unique(labels)}, Counts: {np.bincount(labels)}")
-    print(f"Number of unique subjects in loaded data: {len(np.unique(subject_ids))}")
-
-
-    # Hold out test set
-    X_train_val, X_test, y_train_val, y_test = train_test_split(
-        windows, labels, test_size=test_split_ratio, random_state=42, stratify=labels # Use test_split_ratio
-    )
-    
-    # K-fold cross-validation
-    kfold = KFold(n_splits=num_k_folds, shuffle=True, random_state=42) # Use num_k_folds parameter
-    
-    # Track results across folds
-    fold_results = []
-    all_training_histories = []
-    
-    print(f"\nStarting {num_k_folds}-fold cross-validation for model: {model_name}...") # Use num_k_folds parameter
-    
-    for fold, (train_idx, val_idx) in enumerate(kfold.split(X_train_val), 1):
-        # Split data for this fold
-        X_train_fold = X_train_val[train_idx]
-        X_val_fold = X_train_val[val_idx]
-        y_train_fold = y_train_val[train_idx]
-        y_val_fold = y_train_val[val_idx]
+        # Load data
+        data_loader = BCIDataLoader(
+            data_path=data_base_path, # Use data_base_path parameter
+            subjects=subjects_list,
+            runs=runs_to_include  # Use runs_to_include parameter
+        )
         
-        # Train model for this fold
-        best_val_acc, training_history = train_single_fold(
-            X_train_fold, y_train_fold, X_val_fold, y_val_fold, fold, device,
+        windows, labels, subject_ids = data_loader.load_all_subjects()
+        if windows.size == 0:
+            raise RuntimeError("No data loaded from BCIDataLoader. Cannot proceed with training.")
+        
+        # Normalize the loaded data using the universal normalizer
+        from src.data.data_normalizer import create_universal_normalizer
+        normalizer = create_universal_normalizer(method='zscore', mode='training')
+        windows = normalizer.fit_transform(windows)
+        
+        # Debug: save normalized training data to disk for inspection
+        from pathlib import Path
+        import pandas as pd
+        debug_folder = Path("debug/normalized_training")
+        debug_folder.mkdir(parents=True, exist_ok=True)
+        # Flatten windows from shape (n_windows, n_channels, n_timepoints) to (n_windows, n_channels*n_timepoints)
+        windows_flat = windows.reshape(windows.shape[0], -1)
+        df = pd.DataFrame(windows_flat)
+        df.to_csv(debug_folder / "normalized_windows_training.csv", index=False)
+        
+        # Debug: save normalized training data to disk for inspection
+        import os, numpy as np
+        debug_folder = os.path.join("debug", "normalized_training")
+        os.makedirs(debug_folder, exist_ok=True)
+        np.save(os.path.join(debug_folder, "normalized_windows.npy"), windows)
+        
+        print(f"Data loaded. Shapes: Windows-{windows.shape}, Labels-{labels.shape}, Subject IDs-{subject_ids.shape}")
+        print(f"Unique labels: {np.unique(labels)}, Counts: {np.bincount(labels)}")
+        print(f"Number of unique subjects in loaded data: {len(np.unique(subject_ids))}")
+
+
+        # Hold out test set
+        X_train_val, X_test, y_train_val, y_test = train_test_split(
+            windows, labels, test_size=test_split_ratio, random_state=42, stratify=labels # Use test_split_ratio
+        )
+        
+        # K-fold cross-validation
+        kfold = KFold(n_splits=num_k_folds, shuffle=True, random_state=42) # Use num_k_folds parameter
+        
+        # Track results across folds
+        fold_results = []
+        all_training_histories = []
+        
+        print(f"\nStarting {num_k_folds}-fold cross-validation for model: {model_name}...") # Use num_k_folds parameter
+        
+        for fold, (train_idx, val_idx) in enumerate(kfold.split(X_train_val), 1):
+            # Split data for this fold
+            X_train_fold = X_train_val[train_idx]
+            X_val_fold = X_train_val[val_idx]
+            y_train_fold = y_train_val[train_idx]
+            y_val_fold = y_train_val[val_idx]
+            
+            # Train model for this fold
+            best_val_acc, training_history = train_single_fold(
+                X_train_fold, y_train_fold, X_val_fold, y_val_fold, fold, device,
+                num_epochs=num_epochs_per_fold, 
+                learning_rate=learning_rate, 
+                early_stopping_patience=early_stopping_patience, 
+                batch_size=batch_size, 
+                model_base_path=current_model_base_path, 
+                model_name=model_name, 
+                model_params=model_params
+            )
+            
+            fold_results.append(best_val_acc)
+            all_training_histories.append(training_history)
+        
+        # Calculate cross-validation statistics
+        cv_mean = np.mean(fold_results)
+        cv_std = np.std(fold_results)
+        
+        print(f"\n{'='*50}")
+        print(f"K-FOLD CROSS-VALIDATION RESULTS")
+        print(f"{'='*50}")
+        print(f"Individual fold accuracies:")
+        for i, acc in enumerate(fold_results, 1):
+            print(f"  Fold {i}: {acc:.4f}")
+        print(f"\nMean CV Accuracy: {cv_mean:.4f} ± {cv_std:.4f}")
+        print(f"Model Type: EEGInceptionERP") # Explicitly state model type
+        print(f"{'='*50}")
+        
+        # Train final model on all training data and evaluate on test set
+        print(f"\\nTraining final model on all training data ({model_name})...")
+        final_best_acc, final_history = train_single_fold(
+            X_train_val, y_train_val, X_test, y_test, "final", device,
             num_epochs=num_epochs_per_fold, 
-            learning_rate=learning_rate, 
+            learning_rate=learning_rate,
             early_stopping_patience=early_stopping_patience, 
-            batch_size=batch_size, 
+            batch_size=batch_size,
             model_base_path=current_model_base_path, 
             model_name=model_name, 
             model_params=model_params
         )
         
-        fold_results.append(best_val_acc)
-        all_training_histories.append(training_history)
-    
-    # Calculate cross-validation statistics
-    cv_mean = np.mean(fold_results)
-    cv_std = np.std(fold_results)
-    
-    print(f"\n{'='*50}")
-    print(f"K-FOLD CROSS-VALIDATION RESULTS")
-    print(f"{'='*50}")
-    print(f"Individual fold accuracies:")
-    for i, acc in enumerate(fold_results, 1):
-        print(f"  Fold {i}: {acc:.4f}")
-    print(f"\nMean CV Accuracy: {cv_mean:.4f} ± {cv_std:.4f}")
-    print(f"Model Type: EEGInceptionERP") # Explicitly state model type
-    print(f"{'='*50}")
-    
-    # Train final model on all training data and evaluate on test set
-    print(f"\\nTraining final model on all training data ({model_name})...")
-    final_best_acc, final_history = train_single_fold(
-        X_train_val, y_train_val, X_test, y_test, "final", device,
-        num_epochs=num_epochs_per_fold, 
-        learning_rate=learning_rate,
-        early_stopping_patience=early_stopping_patience, 
-        batch_size=batch_size,
-        model_base_path=current_model_base_path, 
-        model_name=model_name, 
-        model_params=model_params
-    )
-    
-    print(f"\\nFinal test accuracy for {model_name} (EEGInceptionERP): {final_best_acc:.4f}")
-    
-    # Generate comprehensive plots
-    print(f"\\nGenerating training plots for {model_name}...")
-    # plots_base_dir = "plots" # Old base directory for plots
-    model_specific_plots_path = os.path.join(current_model_base_path, model_name) # Save plots inside the model's folder
-    os.makedirs(model_specific_plots_path, exist_ok=True)
-    
-    fig = plt.figure(figsize=(18, 12)) # Increased figure size for better layout with legend
-    
-    # Subplot 1: CV accuracy distribution
-    plt.subplot(2, 3, 1)
-    plt.bar(range(1, num_k_folds + 1), fold_results, alpha=0.7, color='skyblue', edgecolor='navy') # Use num_k_folds
-    plt.axhline(y=cv_mean, color='red', linestyle='--', label=f'Mean: {cv_mean:.3f}')
-    plt.fill_between(range(0, num_k_folds + 2), cv_mean - cv_std, cv_mean + cv_std, # Use num_k_folds
-                     alpha=0.2, color='red', label=f'±1 STD: {cv_std:.3f}')
-    plt.xlabel('Fold')
-    plt.ylabel('Validation Accuracy')
-    plt.title('K-Fold Cross-Validation Results')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Subplot 2: Average learning curves across folds
-    plt.subplot(2, 3, 2)
-    if all_training_histories:
-        max_epochs = max(len(hist['val_accuracies']) for hist in all_training_histories if hist['val_accuracies']) if any(hist['val_accuracies'] for hist in all_training_histories) else 0
+        print(f"\\nFinal test accuracy for {model_name} (EEGInceptionERP): {final_best_acc:.4f}")
         
-        val_acc_mean = []
-        val_acc_std = []
-        if max_epochs > 0: 
-            for epoch in range(max_epochs):
-                epoch_accs = []
-                for hist in all_training_histories:
-                    if epoch < len(hist['val_accuracies']):
-                        epoch_accs.append(hist['val_accuracies'][epoch])
-                if epoch_accs: 
-                    val_acc_mean.append(np.mean(epoch_accs))
-                    val_acc_std.append(np.std(epoch_accs))
+        # Generate comprehensive plots
+        print(f"\\nGenerating training plots for {model_name}...")
+        # plots_base_dir = "plots" # Old base directory for plots
+        model_specific_plots_path = os.path.join(current_model_base_path, model_name) # Save plots inside the model's folder
+        os.makedirs(model_specific_plots_path, exist_ok=True)
+        
+        fig = plt.figure(figsize=(18, 12)) # Increased figure size for better layout with legend
+        
+        # Subplot 1: CV accuracy distribution
+        plt.subplot(2, 3, 1)
+        plt.bar(range(1, num_k_folds + 1), fold_results, alpha=0.7, color='skyblue', edgecolor='navy') # Use num_k_folds
+        plt.axhline(y=cv_mean, color='red', linestyle='--', label=f'Mean: {cv_mean:.3f}')
+        plt.fill_between(range(0, num_k_folds + 2), cv_mean - cv_std, cv_mean + cv_std, # Use num_k_folds
+                         alpha=0.2, color='red', label=f'±1 STD: {cv_std:.3f}')
+        plt.xlabel('Fold')
+        plt.ylabel('Validation Accuracy')
+        plt.title('K-Fold Cross-Validation Results')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Subplot 2: Average learning curves across folds
+        plt.subplot(2, 3, 2)
+        if all_training_histories:
+            max_epochs = max(len(hist['val_accuracies']) for hist in all_training_histories if hist['val_accuracies']) if any(hist['val_accuracies'] for hist in all_training_histories) else 0
+            
+            val_acc_mean = []
+            val_acc_std = []
+            if max_epochs > 0: 
+                for epoch in range(max_epochs):
+                    epoch_accs = []
+                    for hist in all_training_histories:
+                        if epoch < len(hist['val_accuracies']):
+                            epoch_accs.append(hist['val_accuracies'][epoch])
+                    if epoch_accs: 
+                        val_acc_mean.append(np.mean(epoch_accs))
+                        val_acc_std.append(np.std(epoch_accs))
             
             if val_acc_mean: 
                 epochs_range = range(1, len(val_acc_mean) + 1)
@@ -459,84 +478,94 @@ def main(
                                  np.array(val_acc_mean) - np.array(val_acc_std),
                                  np.array(val_acc_mean) + np.array(val_acc_std),
                                  alpha=0.3, color='blue')
+            else: 
+                plt.text(0.5, 0.5, "No data for learning curves", horizontalalignment='center', verticalalignment='center')
+
         else: 
-            plt.text(0.5, 0.5, "No data for learning curves", horizontalalignment='center', verticalalignment='center')
+            plt.text(0.5, 0.5, "No training history available", horizontalalignment='center', verticalalignment='center')
 
-    else: 
-        plt.text(0.5, 0.5, "No training history available", horizontalalignment='center', verticalalignment='center')
+        plt.xlabel('Epoch')
+        plt.ylabel('Validation Accuracy')
+        plt.title('Average Learning Curve Across Folds')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Subplot 3: Final model training curve
+        plt.subplot(2, 3, 3)
+        final_epochs = range(1, len(final_history['train_accuracies']) + 1)
+        plt.plot(final_epochs, final_history['train_accuracies'], 'b-', label='Training')
+        plt.plot(final_epochs, final_history['val_accuracies'], 'r-', label='Test')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.title('Final Model Performance')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Subplot 4: Loss curves for final model
+        plt.subplot(2, 3, 4)
+        plt.plot(final_epochs, final_history['train_losses'], 'b-', label='Training Loss')
+        plt.plot(final_epochs, final_history['val_losses'], 'r-', label='Test Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Final Model Loss')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Subplot 5: Individual fold learning curves
+        ax5 = plt.subplot(2, 3, 5)
+        for i, hist in enumerate(all_training_histories):
+            fold_epochs = range(1, len(hist['val_accuracies']) + 1)
+            ax5.plot(fold_epochs, hist['val_accuracies'], label=f'Fold {i+1} Val Acc') # Added plotting logic
+        ax5.set_xlabel('Epoch')
+        ax5.set_ylabel('Validation Accuracy')
+        ax5.set_title('Individual Fold Learning Curves')
+        ax5.legend(fontsize='small') # Simpler legend, adjust if needed
+        ax5.grid(True, alpha=0.3)
+        
+        # Subplot 6: Summary statistics
+        plt.subplot(2, 3, 6)
+        plt.axis('off')
+        # Add model_type to summary text
+        summary_text = f"""
+        Model Type: EEGInceptionERP
+        K-Fold Cross-Validation Summary
+        
+        Number of Folds: {num_k_folds} 
+        Mean Accuracy: {cv_mean:.4f}
+        Standard Deviation: {cv_std:.4f}
+        Min Accuracy: {min(fold_results):.4f}
+        Max Accuracy: {max(fold_results):.4f}
+        
+        Final Test Accuracy: {final_best_acc:.4f}
+        
+        Training Parameters:
+        • Batch Size: {batch_size}
+        • Max Epochs: {num_epochs_per_fold}
+        • Learning Rate: {learning_rate}
+        • Early Stopping: {early_stopping_patience} epochs
+        """
+        plt.text(0.1, 0.9, summary_text, transform=plt.gca().transAxes, 
+                 fontsize=10, verticalalignment='top', fontfamily='monospace')
+        
+        plt.tight_layout(rect=[0, 0, 0.95, 1]) # Adjust rect to ensure all titles/labels fit
+        
+        plot_filename = os.path.join(model_specific_plots_path, 'kfold_training_results.png') # Save plot in model specific path
+        plt.savefig(plot_filename)
+        print(f"Training plots saved to {plot_filename}")
+        # plt.show() # This was causing the crash with 'Agg' backend.
+        plt.close(fig) # Explicitly close the figure to free resources.
 
-    plt.xlabel('Epoch')
-    plt.ylabel('Validation Accuracy')
-    plt.title('Average Learning Curve Across Folds')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Subplot 3: Final model training curve
-    plt.subplot(2, 3, 3)
-    final_epochs = range(1, len(final_history['train_accuracies']) + 1)
-    plt.plot(final_epochs, final_history['train_accuracies'], 'b-', label='Training')
-    plt.plot(final_epochs, final_history['val_accuracies'], 'r-', label='Test')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.title('Final Model Performance')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Subplot 4: Loss curves for final model
-    plt.subplot(2, 3, 4)
-    plt.plot(final_epochs, final_history['train_losses'], 'b-', label='Training Loss')
-    plt.plot(final_epochs, final_history['val_losses'], 'r-', label='Test Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Final Model Loss')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Subplot 5: Individual fold learning curves
-    ax5 = plt.subplot(2, 3, 5)
-    for i, hist in enumerate(all_training_histories):
-        fold_epochs = range(1, len(hist['val_accuracies']) + 1)
-        ax5.plot(fold_epochs, hist['val_accuracies'], label=f'Fold {i+1} Val Acc') # Added plotting logic
-    ax5.set_xlabel('Epoch')
-    ax5.set_ylabel('Validation Accuracy')
-    ax5.set_title('Individual Fold Learning Curves')
-    ax5.legend(fontsize='small') # Simpler legend, adjust if needed
-    ax5.grid(True, alpha=0.3)
-    
-    # Subplot 6: Summary statistics
-    plt.subplot(2, 3, 6)
-    plt.axis('off')
-    # Add model_type to summary text
-    summary_text = f"""
-    Model Type: EEGInceptionERP
-    K-Fold Cross-Validation Summary
-    
-    Number of Folds: {num_k_folds} 
-    Mean Accuracy: {cv_mean:.4f}
-    Standard Deviation: {cv_std:.4f}
-    Min Accuracy: {min(fold_results):.4f}
-    Max Accuracy: {max(fold_results):.4f}
-    
-    Final Test Accuracy: {final_best_acc:.4f}
-    
-    Training Parameters:
-    • Batch Size: {batch_size}
-    • Max Epochs: {num_epochs_per_fold}
-    • Learning Rate: {learning_rate}
-    • Early Stopping: {early_stopping_patience} epochs
-    """
-    plt.text(0.1, 0.9, summary_text, transform=plt.gca().transAxes, 
-             fontsize=10, verticalalignment='top', fontfamily='monospace')
-    
-    plt.tight_layout(rect=[0, 0, 0.95, 1]) # Adjust rect to ensure all titles/labels fit
-    
-    plot_filename = os.path.join(model_specific_plots_path, 'kfold_training_results.png') # Save plot in model specific path
-    plt.savefig(plot_filename)
-    print(f"Training plots saved to {plot_filename}")
-    # plt.show() # This was causing the crash with 'Agg' backend.
-    plt.close(fig) # Explicitly close the figure to free resources.
+        return {"cv_mean_accuracy": cv_mean, "cv_std_accuracy": cv_std, "final_test_accuracy": final_best_acc, "plot_path": plot_filename, "model_name": model_name}
 
-    return {"cv_mean_accuracy": cv_mean, "cv_std_accuracy": cv_std, "final_test_accuracy": final_best_acc, "plot_path": plot_filename, "model_name": model_name}
+    except Exception as e:
+        import traceback
+        # Save the full error traceback for debugging purposes
+        error_log_folder = os.path.join("debug")
+        os.makedirs(error_log_folder, exist_ok=True)
+        with open(os.path.join(error_log_folder, "training_error.log"), "w") as f:
+            f.write(traceback.format_exc())
+        print("Something went wrong during the training. Check debug/training_error.log for details.")
+        raise
 
 if __name__ == '__main__':
     # Example usage for CLI, can be expanded with argparse

@@ -106,11 +106,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.fine_tuning_tab, "Fine-Tuning") # Add Fine-Tuning tab
         self.tabs.addTab(self.pylsl_tab, "OpenBCI Live (PyLSL)") # Add PylslTab instance
 
-        # Populate tabs - Handled by individual tab classes' __init__
-        # self.setup_data_tab() # Handled by DataManagementTab
-        # self.setup_training_tab() # Handled by TrainingTab
-        # self.setup_pylsl_tab() # Now handled by PylslTab
-
         # Exit button
         self.exit_button = QPushButton("Exit Application")
         self.exit_button.clicked.connect(self.close)

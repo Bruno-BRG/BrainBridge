@@ -380,11 +380,16 @@ class ModelFineTuner:
             # Generate mock patient data matching the expected format
             n_samples = 1000  # Number of windows
             n_channels = params['n_channels']
-            n_times = int(params['window_length'] * params['sample_rate'])  # 400 time points
+            n_times = int(params['window_length'] * params['sample_rate'])  # 400 samples at 125Hz
             
-            # Create synthetic patient data (in practice, load from CSV)
             mock_windows = np.random.randn(n_samples, n_channels, n_times).astype(np.float32)
             mock_labels = np.random.randint(0, 2, n_samples)  # Binary classification
+
+            # NEW: Normalize the patient windows using the universal finetuning normalizer.
+            from src.data.data_normalizer import create_finetuning_normalizer
+            # Using a chosen stats file (adjust path as needed)
+            normalizer = create_finetuning_normalizer(stats_path="global_stats.json")
+            mock_windows = normalizer.fit_transform(mock_windows)
             
             # Apply train/validation split
             from sklearn.model_selection import train_test_split
