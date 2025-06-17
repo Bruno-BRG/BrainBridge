@@ -6,18 +6,17 @@ Author:  Copilot (NASA-style guidelines)
 Created: 2025-05-28
 Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
          Integrates with the train_model script for backend training logic.
+         IMPORTANT: Fixed parameters to match training_pipeline_openbci_v2(1).ipynb exactly.
 """
-
-import os
-import sys
-import traceback 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QGroupBox,
-    QLabel, QLineEdit, QRadioButton, QSpinBox,
-    QDoubleSpinBox, QPushButton, QTextEdit, QMessageBox,
+    QLabel, QLineEdit, QPushButton, QTextEdit, QMessageBox,
     QComboBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal
+import os
+import sys
+import traceback
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -31,59 +30,73 @@ class TrainingThread(QThread):
     training_error = pyqtSignal(str)
     log_message = pyqtSignal(str)
     
-    def __init__(self, training_params, data_cache, model_name):
+    def __init__(self, model_name):
         super().__init__()
-        self.training_params = training_params
-        self.data_cache = data_cache
-        self.model_name = model_name  # Add missing model_name attribute
+        self.model_name = model_name
+        
+        # FIXADO: Parâmetros exatos do notebook
+        self.EXACT_TRAINING_PARAMS = {
+            "num_k_folds": 10,              # Fixo: 10 folds
+            "num_epochs_per_fold": 30,       # Fixo: 30 épocas
+            "batch_size": 10,               # Fixo: 10
+            "early_stopping_patience": 8,    # Fixo: 8 épocas
+            "learning_rate": 1e-3,          # Fixo: 0.001
+            "test_split_ratio": 0.2,        # Fixo: 20% teste
+            "train_subject_ids": "all"      # Fixo: todos os sujeitos
+        }
         
     def run(self):
         try:
-            self.log_message.emit(f"Starting training for model: {self.model_name}...")
-            
-            subjects_to_use_str = self.training_params.get("train_subject_ids", "all")
-            
-            subjects_to_use = None
-            if subjects_to_use_str.lower() == "all":
-                subjects_to_use = "all"  # Pass "all" as string instead of None
-            else:
-                try:
-                    subjects_to_use = [int(s.strip()) for s in subjects_to_use_str.split(',') if s.strip()]
-                except ValueError:
-                    self.training_error.emit(f"Invalid subject IDs format: {subjects_to_use_str}. Use comma-separated numbers or 'all'.")
-                    return
-            
-            if self.data_cache["windows"] is None or self.data_cache["labels"] is None:
-                self.training_error.emit("No data loaded. Please load data before starting training.")
-                return
+            self.log_message.emit(f"Iniciando treinamento com protocolo EXATO do notebook para o modelo: {self.model_name}")
+            self.log_message.emit(f"Usando parâmetros fixos:")
+            for name, value in self.EXACT_TRAINING_PARAMS.items():
+                self.log_message.emit(f"  - {name}: {value}")
 
+            # Preparação da execução
             original_stdout = sys.stdout
             original_stderr = sys.stderr
             sys.stdout = self
             sys.stderr = self
 
+            # Compatibilidade com PyTorch 2.6+
+            os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+            
+            # Verificação de PyTorch
+            try:
+                import torch
+                self.log_message.emit(f"PyTorch versão: {torch.__version__}")
+            except ImportError:
+                self.log_message.emit("PyTorch não encontrado.")
+
+            # FIXADO: Execução do treinamento com parâmetros fixos do notebook
+            data_path = os.path.join(project_root, "eeg_data")
+            
+            # CRITICAL: Add debug logging for data types
+            self.log_message.emit("🔧 Debugging data types before training...")
+            
             results = train_main_script(
-                subjects_to_use=subjects_to_use,
-                num_epochs_per_fold=self.training_params["epochs"],
-                num_k_folds=self.training_params["k_folds"], # Added k_folds
-                batch_size=self.training_params["batch_size"],
-                test_split_ratio=self.training_params["test_split_size"],
-                learning_rate=self.training_params["learning_rate"],
-                early_stopping_patience=self.training_params["early_stopping_patience"],
-                data_base_path=self.data_cache["data_path"],
+                subjects_to_use="all",
+                num_epochs_per_fold=self.EXACT_TRAINING_PARAMS["num_epochs_per_fold"],
+                num_k_folds=self.EXACT_TRAINING_PARAMS["num_k_folds"],
+                batch_size=self.EXACT_TRAINING_PARAMS["batch_size"],
+                test_split_ratio=self.EXACT_TRAINING_PARAMS["test_split_ratio"],
+                learning_rate=self.EXACT_TRAINING_PARAMS["learning_rate"],
+                early_stopping_patience=self.EXACT_TRAINING_PARAMS["early_stopping_patience"],
+                data_base_path=data_path,
                 model_name=self.model_name
-                # model_params_json is not set from UI, will default to None in train_main_script
             )
             
+            # Restaurar stdout/stderr
             sys.stdout = original_stdout
             sys.stderr = original_stderr
 
-            self.log_message.emit("Training finished.")
+            self.log_message.emit("Treinamento concluído com sucesso!")
             self.training_finished.emit(results)
+            
         except Exception as e:
-            sys.stdout = original_stdout # Restore stdout in case of error
-            sys.stderr = original_stderr # Restore stderr in case of error
-            self.training_error.emit(f"An error occurred during training: {str(e)}\n{traceback.format_exc()}")
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            self.training_error.emit(f"Erro durante treinamento: {str(e)}\n{traceback.format_exc()}")
 
     def write(self, message):
         self.log_message.emit(message.strip())
@@ -99,121 +112,120 @@ class TrainingTab(QWidget):
 
         layout = QVBoxLayout(self)
 
+        # FIXADO: Simplificação da interface para mostrar apenas o essencial
+        info_group = QGroupBox("Informações do Treinamento Fixado")
+        info_layout = QFormLayout()
+        
+        # Mensagem explicando o treinamento fixo
+        fixed_info_label = QLabel(
+            "Este treinamento usa parâmetros EXATOS do notebook para garantir reprodutibilidade.\n"
+            "Todos os hiperparâmetros estão fixos e não podem ser alterados.\n\n"
+            "Parâmetros do notebook:\n"
+            "- K-folds: 10\n"
+            "- Épocas por fold: 30\n"
+            "- Batch size: 10\n"
+            "- Learning rate: 0.001\n"
+            "- Early stopping: 8 épocas\n"
+            "- Split de teste: 20%\n"
+            "- Normalização: robust_zscore por canal"
+        )
+        fixed_info_label.setStyleSheet("color: blue;")
+        info_layout.addRow(fixed_info_label)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)
+
         # --- Model Naming Group ---
-        model_naming_group = QGroupBox("Model Naming")
+        model_naming_group = QGroupBox("Nome do Modelo")
         model_naming_layout = QFormLayout()
         self.model_name_input = QLineEdit(self.main_window.training_params_config["model_name"])
-        self.model_name_input.setPlaceholderText("Enter a name for your model")
+        self.model_name_input.setPlaceholderText("Digite um nome para seu modelo")
         self.model_name_input.textChanged.connect(self.update_model_name_config)
-        model_naming_layout.addRow(QLabel("Model Name:"), self.model_name_input)
+        model_naming_layout.addRow(QLabel("Nome do Modelo:"), self.model_name_input)
         model_naming_group.setLayout(model_naming_layout)
         layout.addWidget(model_naming_group)
 
-        # --- Parameter Configuration Group ---
-        param_config_group = QGroupBox("Parameter Configuration")
-        param_config_layout = QVBoxLayout()
-
-        self.rb_default_params = QRadioButton("Use Default Training Parameters")
-        self.rb_default_params.setChecked(self.main_window.training_params_config["use_default_params"])
-        self.rb_default_params.toggled.connect(self.toggle_custom_params_group)
-        param_config_layout.addWidget(self.rb_default_params)
-
-        self.rb_custom_params = QRadioButton("Use Custom Training Parameters")
-        self.rb_custom_params.setChecked(not self.main_window.training_params_config["use_default_params"])
-        self.rb_custom_params.toggled.connect(self.toggle_custom_params_group)
-        param_config_layout.addWidget(self.rb_custom_params)
-
-        param_config_group.setLayout(param_config_layout)
-        layout.addWidget(param_config_group)
-
-        # --- Custom Parameters Group ---
-        self.custom_params_group = QGroupBox("Custom Training Parameters")
-        custom_params_layout = QFormLayout()
-        self.main_window.custom_param_inputs = {} # Store inputs for easy access
-
-        # Epochs
-        self.main_window.custom_param_inputs["epochs"] = QSpinBox()
-        self.main_window.custom_param_inputs["epochs"].setRange(1, 10000)
-        self.main_window.custom_param_inputs["epochs"].setValue(self.main_window.training_params_config["epochs"])
-        custom_params_layout.addRow(QLabel("Epochs:"), self.main_window.custom_param_inputs["epochs"])
-
-        # K-Folds
-        self.main_window.custom_param_inputs["k_folds"] = QSpinBox()
-        self.main_window.custom_param_inputs["k_folds"].setRange(1, 100)
-        self.main_window.custom_param_inputs["k_folds"].setValue(self.main_window.training_params_config["k_folds"])
-        custom_params_layout.addRow(QLabel("K-Folds:"), self.main_window.custom_param_inputs["k_folds"])
-
-        # Learning Rate
-        self.main_window.custom_param_inputs["learning_rate"] = QDoubleSpinBox()
-        self.main_window.custom_param_inputs["learning_rate"].setDecimals(5)
-        self.main_window.custom_param_inputs["learning_rate"].setRange(0.00001, 1.0)
-        self.main_window.custom_param_inputs["learning_rate"].setSingleStep(0.0001)
-        self.main_window.custom_param_inputs["learning_rate"].setValue(self.main_window.training_params_config["learning_rate"])
-        custom_params_layout.addRow(QLabel("Learning Rate:"), self.main_window.custom_param_inputs["learning_rate"])
-
-        # Early Stopping Patience
-        self.main_window.custom_param_inputs["early_stopping_patience"] = QSpinBox()
-        self.main_window.custom_param_inputs["early_stopping_patience"].setRange(1, 1000)
-        self.main_window.custom_param_inputs["early_stopping_patience"].setValue(self.main_window.training_params_config["early_stopping_patience"])
-        custom_params_layout.addRow(QLabel("Early Stopping Patience:"), self.main_window.custom_param_inputs["early_stopping_patience"])
-
-        # Batch Size
-        self.main_window.custom_param_inputs["batch_size"] = QSpinBox()
-        self.main_window.custom_param_inputs["batch_size"].setRange(1, 1024)
-        self.main_window.custom_param_inputs["batch_size"].setValue(self.main_window.training_params_config["batch_size"])
-        custom_params_layout.addRow(QLabel("Batch Size:"), self.main_window.custom_param_inputs["batch_size"])
-
-        # Test Split Size
-        self.main_window.custom_param_inputs["test_split_size"] = QDoubleSpinBox()
-        self.main_window.custom_param_inputs["test_split_size"].setDecimals(2)
-        self.main_window.custom_param_inputs["test_split_size"].setRange(0.01, 0.99)
-        self.main_window.custom_param_inputs["test_split_size"].setSingleStep(0.01)
-        self.main_window.custom_param_inputs["test_split_size"].setValue(self.main_window.training_params_config["test_split_size"])
-        custom_params_layout.addRow(QLabel("Test Split Ratio:"), self.main_window.custom_param_inputs["test_split_size"])
-        
-        # Train Subject IDs
-        self.main_window.custom_param_inputs["train_subject_ids"] = QLineEdit()
-        self.main_window.custom_param_inputs["train_subject_ids"].setPlaceholderText("e.g., 1,2,3 or all")
-        self.main_window.custom_param_inputs["train_subject_ids"].setText(self.main_window.training_params_config["train_subject_ids"])
-        custom_params_layout.addRow(QLabel("Train Subject IDs:"), self.main_window.custom_param_inputs["train_subject_ids"])
-
-
-        self.custom_params_group.setLayout(custom_params_layout)
-        layout.addWidget(self.custom_params_group)
-        self.toggle_custom_params_group() # Set initial state
-
         # --- Training Action Group ---
-        training_action_group = QGroupBox("Training Actions")
+        training_action_group = QGroupBox("Ações de Treinamento")
         training_action_layout = QVBoxLayout()
-        self.btn_start_training = QPushButton("Start Training")
+        self.btn_start_training = QPushButton("Iniciar Treinamento (Protocolo Exato do Notebook)")
+        self.btn_start_training.setStyleSheet("font-weight: bold; background-color: #4CAF50; color: white; padding: 10px;")
         self.btn_start_training.clicked.connect(self.start_training_action)
         training_action_layout.addWidget(self.btn_start_training)
         training_action_group.setLayout(training_action_layout)
         layout.addWidget(training_action_group)
 
         # --- Training Log Group ---
-        training_log_group = QGroupBox("Training Log & Results")
+        training_log_group = QGroupBox("Log de Treinamento & Resultados")
         training_log_layout = QVBoxLayout()
         self.training_log_display = QTextEdit()
         self.training_log_display.setReadOnly(True)
+        training_log_layout.addWidget(self.training_log_display)
+        training_log_group.setLayout(training_log_layout)
+        layout.addWidget(training_log_group)
+        
         layout.addStretch()
         self.setLayout(layout)
     
     def update_model_name_config(self, text):
         self.main_window.training_params_config["model_name"] = text
-        self.main_window.current_model_name = text # Also update MainWindow's current_model_name
-
-    def toggle_custom_params_group(self):
-        use_custom = self.rb_custom_params.isChecked()
-        self.custom_params_group.setEnabled(use_custom)
-        self.main_window.training_params_config["use_default_params"] = not use_custom
+        self.main_window.current_model_name = text
 
     def start_training_action(self):
         if self.training_thread and self.training_thread.isRunning():
-            QMessageBox.warning(self, "Training in Progress", "A training process is already running.")
+            QMessageBox.warning(self, "Treinamento em andamento", "Um processo de treinamento já está em execução.")
             return
 
-        # Update params from UI
+        model_name = self.model_name_input.text().strip()
+        if not model_name:
+            QMessageBox.warning(self, "Nome inválido", "Por favor, forneça um nome para o modelo.")
+            return
+
+        self.main_window.current_model_name = model_name
+
+        self.training_log_display.clear()
+        self.training_log_display.append(f"Preparando para treinar modelo: {model_name}")
+        self.training_log_display.append("Usando o protocolo EXATO do notebook training_pipeline_openbci_v2(1).ipynb")
+        self.training_log_display.append("============================================================")
+
+        # FIXADO: Criação do thread com apenas o nome do modelo
+        self.training_thread = TrainingThread(model_name)
+        self.training_thread.training_finished.connect(self.training_finished)
+        self.training_thread.training_error.connect(self.training_error)
+        self.training_thread.log_message.connect(self.append_log_message)
+        
+        self.btn_start_training.setEnabled(False)
+        self.btn_start_training.setText("Treinamento em andamento...")
+        self.training_thread.start()
+
+    def append_log_message(self, message):
+        self.training_log_display.append(message)
+        # Auto-scroll para baixo
+        scrollbar = self.training_log_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        
+    def training_finished(self, results):
+        self.btn_start_training.setEnabled(True)
+        self.btn_start_training.setText("Iniciar Treinamento (Protocolo Exato do Notebook)")
+        
+        # Exibir resultados
+        self.training_log_display.append("\n============================================================")
+        self.training_log_display.append("✅ TREINAMENTO CONCLUÍDO COM SUCESSO!")
+        self.training_log_display.append("============================================================")
+        self.training_log_display.append(f"Acurácia média CV: {results['cv_mean_accuracy']:.4f} ± {results['cv_std_accuracy']:.4f}")
+        self.training_log_display.append(f"Acurácia final de teste: {results['final_test_accuracy']:.4f}")
+        self.training_log_display.append(f"Plot salvo em: {results['plot_path']}")
+        
+    def training_error(self, error_message):
+        self.btn_start_training.setEnabled(True)
+        self.btn_start_training.setText("Iniciar Treinamento (Protocolo Exato do Notebook)")
+        
+        self.training_log_display.append("\n============================================================")
+        self.training_log_display.append("❌ ERRO DE TREINAMENTO")
+        self.training_log_display.append("============================================================")
+        self.training_log_display.append(error_message)
+        
+        QMessageBox.critical(self, "Erro de Treinamento", 
+                            "Ocorreu um erro durante o treinamento. Verifique o log para detalhes.")
         current_params = {}
         if self.main_window.training_params_config["use_default_params"]:
             # Use default values (already in training_params_config)

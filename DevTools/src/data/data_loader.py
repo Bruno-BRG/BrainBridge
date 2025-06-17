@@ -144,8 +144,8 @@ class BCIDataLoader:
     
     def preprocess_data(self, 
                        eeg_data: np.ndarray, 
-                       lowcut: float = 0.5,  # Changed from 0.5 to 8.0
-                       highcut: float = 50.0,  # Changed from 50.0 to 30.0
+                       lowcut: float = 0.5,
+                       highcut: float = 50.0,
                        notch_freq: float = 50.0,
                        apply_standardization: bool = True) -> np.ndarray:
         """
@@ -163,6 +163,9 @@ class BCIDataLoader:
         """
         logger.info("Applying preprocessing...")
         
+        # CRITICAL: Ensure input is float32 from the start
+        eeg_data = eeg_data.astype(np.float32)
+        
         # Design bandpass filter
         nyquist = self.sample_rate / 2
         low_norm = lowcut / nyquist
@@ -175,25 +178,27 @@ class BCIDataLoader:
         b_notch, a_notch = signal.iirnotch(notch_freq, 30, self.sample_rate)
         
         # Apply filters to each channel
-        filtered_data = np.zeros_like(eeg_data)
+        filtered_data = np.zeros_like(eeg_data, dtype=np.float32)
         for ch in range(eeg_data.shape[1]):
             # Bandpass filter
             filtered_ch = signal.filtfilt(b_band, a_band, eeg_data[:, ch])
             # Notch filter
             filtered_ch = signal.filtfilt(b_notch, a_notch, filtered_ch)
-            filtered_data[:, ch] = filtered_ch
+            filtered_data[:, ch] = filtered_ch.astype(np.float32)
         
         # Standardization (z-score normalization)
         if apply_standardization:
             filtered_data = self.normalizer.fit_transform(filtered_data)
+            # CRITICAL: Ensure output is float32
+            filtered_data = filtered_data.astype(np.float32)
         
         logger.info("Preprocessing completed")
-        return filtered_data.astype(np.float32)
+        return filtered_data
     
     def create_windows(self, 
                       eeg_data: np.ndarray, 
                       events: List[Tuple[int, str]],
-                      window_length: float = 3.2,  # Changed from 4.0 to 3.2 for 400 samples at 125Hz
+                      window_length: float = 3.2,
                       baseline_length: float = 1.0,
                       overlap: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -236,7 +241,7 @@ class BCIDataLoader:
             
             # Extract window and transpose to (channels, time)
             window = eeg_data[start_sample:end_sample, :].T
-            windows.append(window)
+            windows.append(window.astype(np.float32))  # CRITICAL: Ensure float32
             
             # Convert label to class index (T1=0 for left, T2=1 for right)
             label = 0 if event_label == 'T1' else 1
@@ -246,7 +251,7 @@ class BCIDataLoader:
             logger.warning("No valid windows created!")
             return np.array([]), np.array([])
         
-        windows = np.array(windows, dtype=np.float32)
+        windows = np.array(windows, dtype=np.float32)  # CRITICAL: Explicit float32
         labels = np.array(labels, dtype=np.int64)
         
         logger.info(f"Created {len(windows)} windows of shape {windows.shape[1:]} with labels: {np.bincount(labels)}")
@@ -371,13 +376,15 @@ class BCIDataset(Dataset):
         assert len(windows) == len(labels), "Windows and labels must have same length"
         assert len(windows.shape) == 3, "Windows must have shape (n_windows, n_channels, n_timepoints)"
         
-        self.windows = torch.from_numpy(windows).float()
-        self.labels = torch.from_numpy(labels).long()
+        # CRITICAL: Ensure tensor types are consistent
+        self.windows = torch.from_numpy(windows.astype(np.float32)).float()
+        self.labels = torch.from_numpy(labels.astype(np.int64)).long()
         self.transform = transform
         self.augment = augment
         
         logger.info(f"Created dataset with {len(self)} samples")
         logger.info(f"Window shape: {self.windows.shape[1:]}")
+        logger.info(f"Window dtype: {self.windows.dtype}")  # DEBUG: Log data type
         logger.info(f"Class distribution: {torch.bincount(self.labels)}")
     
     def __len__(self) -> int:
@@ -405,7 +412,8 @@ class BCIDataset(Dataset):
         if self.transform:
             window = self.transform(window)
         
-        return window, label
+        # CRITICAL: Ensure output is always float32
+        return window.float(), label
     
     def _augment_window(self, window: torch.Tensor) -> torch.Tensor:
         """
@@ -501,13 +509,18 @@ def create_data_loaders(data_path: str,
     val_dataset = BCIDataset(windows[val_mask], labels[val_mask], augment=False)
     test_dataset = BCIDataset(windows[test_mask], labels[test_mask], augment=False)
     
-    # Create data loaders
+    # Create data loaders with PyTorch 2.6 compatibility
+    # Starting with PyTorch 2.6, DataLoader requires persistent_workers flag
+    # to match older behavior with multi-worker dataloading
+    use_persistent_workers = num_workers > 0
+    
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
         shuffle=True, 
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available()
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=use_persistent_workers if num_workers > 0 else False
     )
     
     val_loader = DataLoader(
@@ -515,7 +528,8 @@ def create_data_loaders(data_path: str,
         batch_size=batch_size, 
         shuffle=False, 
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available()
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=use_persistent_workers if num_workers > 0 else False
     )
     
     test_loader = DataLoader(
@@ -523,7 +537,8 @@ def create_data_loaders(data_path: str,
         batch_size=batch_size, 
         shuffle=False, 
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available()
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=use_persistent_workers if num_workers > 0 else False
     )
     
     logger.info(f"Created data loaders:")

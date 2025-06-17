@@ -57,41 +57,37 @@ class MainWindow(QMainWindow):
         }
         # Initialize training parameters cache / config
         self.training_params_config = {
-            "use_default_params": True,
-            "model_name": "unnamed_model", # Add model_name here
-            # Placeholder for custom params
-            "epochs": 50, # Default from CLI
-            "k_folds": 5, # Default from CLI
-            "learning_rate": 0.001, # Default from CLI
-            "early_stopping_patience": 5, # Default from CLI
-            "batch_size": 32, # Default from CLI
-            "test_split_size": 0.2, # Default from CLI
-            "train_subject_ids": "all" # Default to all loaded subjects
+            "model_name": "eeg_inception_openbci_cv10",  # Nome padrão igual ao notebook
+            # NOTA: Todos os outros parâmetros estão FIXADOS no TrainingThread
+            # para garantir reprodutibilidade exata do notebook
         }
 
-        # References to custom param input fields
-        self.custom_param_inputs = {}        # Main widget and layout
+        # Initialize patient data for compatibility
+        self.current_patient_id = None
+        self.current_patient_data = None
+
+        # Main widget and layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
-        
+
         # Tab widget for different sections
         self.tabs = QTabWidget()
         self.main_layout.addWidget(self.tabs)
-          # Create tabs
-        self.pylsl_tab = PylslTab(self) # Instantiate PylslTab
+        
+        # Create tabs
         self.patient_tab = PatientManagementTab(self)  # Instantiate PatientManagementTab
         self.patient_tab.patient_selected.connect(self.on_patient_selected)  # Connect signal
-        
+        self.pylsl_tab = PylslTab(self)
+
         # Add tabs to the tab widget
         self.tabs.insertTab(0, self.patient_tab, "Patient Management")  # Add as first tab
         self.tabs.addTab(self.pylsl_tab, "OpenBCI Live (PyLSL)") # Add PylslTab instance
-        
-        # Populate tabs - Handled by individual tab classes' __init__
-        # self.setup_data_tab() # Handled by DataManagementTab
-        # self.setup_training_tab() # Handled by TrainingTab
-        # self.setup_pylsl_tab() # Now handled by PylslTab
-          # Exit button
+
+        # Initialize custom parameter inputs for backward compatibility
+        self.custom_param_inputs = {}  # CRITICAL: Add missing attribute
+
+        # Exit button
         self.exit_button = QPushButton("Exit Application")
         self.exit_button.clicked.connect(self.close)
         self.main_layout.addWidget(self.exit_button)
@@ -108,10 +104,6 @@ class MainWindow(QMainWindow):
         patient_data_dir = os.path.join(project_root, "patient_data", patient_id)
         os.makedirs(patient_data_dir, exist_ok=True)
         
-        # Update EEG data path for this patient
-        self.data_cache["patient_data_dir"] = patient_data_dir
-        self.data_cache["current_patient_id"] = patient_id
-        
         # Configure PylslTab to use patient folder automatically
         if hasattr(self.pylsl_tab, 'set_patient_folder'):
             self.pylsl_tab.set_patient_folder(patient_id, patient_data)
@@ -126,12 +118,6 @@ class MainWindow(QMainWindow):
         # Reset window title
         self.setWindowTitle("BCI Application")
         
-        # Clear patient-specific data cache
-        if "patient_data_dir" in self.data_cache:
-            del self.data_cache["patient_data_dir"]
-        if "current_patient_id" in self.data_cache:
-            del self.data_cache["current_patient_id"]
-        
         # Clear PylslTab patient folder configuration
         if hasattr(self.pylsl_tab, 'clear_patient_folder'):
             self.pylsl_tab.clear_patient_folder()
@@ -144,6 +130,20 @@ class MainWindow(QMainWindow):
             self.pylsl_tab.clear_resources()
         # Add similar calls for other tabs if they implement resource cleanup
         super().closeEvent(event)
+
+def start_gui():
+    app = QApplication(sys.argv)
+    main_window = MainWindow()
+    main_window.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    main_win = MainWindow()
+    main_win.show()
+    sys.exit(app.exec_())
+        # Add similar calls for other tabs if they implement resource cleanup
+    super().closeEvent(event)
 
 def start_gui():
     app = QApplication(sys.argv)

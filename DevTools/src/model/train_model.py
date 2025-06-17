@@ -56,6 +56,10 @@ def train_epoch(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: 
     total = 0
     
     for inputs, labels in dataloader:
+        # CRITICAL: Ensure consistent dtypes before moving to device
+        inputs = inputs.float()  # Ensure float32
+        labels = labels.long()   # Ensure int64
+        
         inputs, labels = inputs.to(device), labels.to(device)
         
         optimizer.zero_grad()
@@ -98,14 +102,18 @@ def validate(model: EEGInceptionERPModel, dataloader: DataLoader, criterion: tor
     
     with torch.no_grad():
         for inputs, labels in dataloader:
-            inputs, labels = inputs.to(device), labels.to(device) # Added this line
-            outputs = model(inputs) # Added this line
-            loss = criterion(outputs, labels) # Added this line
+            # CRITICAL: Ensure consistent dtypes before moving to device
+            inputs = inputs.float()  # Ensure float32
+            labels = labels.long()   # Ensure int64
             
-            running_loss += loss.item() # Added this line
-            _, predicted = torch.max(outputs.data, 1) # Added this line
-            total += labels.size(0) # Added this line
-            correct += (predicted == labels).sum().item() # Added this line
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
     
     val_loss = running_loss / len(dataloader)
     val_acc = correct / total
@@ -155,11 +163,17 @@ def train_single_fold(
         FileNotFoundError: If `model_base_path` or `model_name` subdirectories cannot be created.
         # Other exceptions can be raised by PyTorch operations or EEGModel instantiation.
     """
+    # CRITICAL: Ensure data types are consistent from the start
+    X_train = X_train.astype(np.float32)
+    X_val = X_val.astype(np.float32)
+    y_train = y_train.astype(np.int64)
+    y_val = y_val.astype(np.int64)
+    
     # Create dataloaders
     train_loader = DataLoader(list(zip(X_train, y_train)), 
-                            batch_size=batch_size, shuffle=True) # Use batch_size parameter
+                            batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(list(zip(X_val, y_val)), 
-                          batch_size=batch_size) # Use batch_size parameter
+                          batch_size=batch_size)
     
     # Create model
     n_channels = X_train.shape[1]
@@ -222,9 +236,8 @@ def train_single_fold(
             best_val_loss = val_loss
             patience_counter = 0
             # Save best model for this fold
-            model.set_trained(True) # Set trained status before saving
-            # Fixed model type in path
-            fold_model_save_path = os.path.join(model_base_path, model_name, f'eeginceptionerp_fold_{fold_num}.pth')
+            model.set_trained(True)
+            fold_model_save_path = os.path.join(model_base_path, model_name, f'eeginceptionerp_fold_{fold_num}.pt')
             os.makedirs(os.path.dirname(fold_model_save_path), exist_ok=True)
             model.save(fold_model_save_path)
         else:
@@ -344,8 +357,14 @@ def main(
             raise RuntimeError("No data loaded from BCIDataLoader. Cannot proceed with training.")
         
         # Normalize the loaded data using the universal normalizer
-        from src.data.data_normalizer import create_universal_normalizer
-        normalizer = create_universal_normalizer(method='zscore', mode='training')
+        from src.data.data_normalizer import ImprovedEEGNormalizer
+        
+        # FIXADO: Usar exatamente o mesmo normalizador do notebook
+        normalizer = ImprovedEEGNormalizer(
+            method='robust_zscore',    # Exato do notebook
+            scope='channel',           # Exato do notebook
+            outlier_threshold=3.0      # Exato do notebook
+        )
         windows = normalizer.fit_transform(windows)
         
         # Debug: save normalized training data to disk for inspection
@@ -599,4 +618,5 @@ if __name__ == '__main__':
         model_params_json=args.model_params_json
     )
     print("\\nTraining Run Summary:")
+    print(results)
     print(results)

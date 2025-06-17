@@ -1,335 +1,384 @@
 """
-Universal Data Normalization Module
-
-This module provides universal data normalization for EEG data from any equipment.
-It ensures all data is normalized consistently for training, fine-tuning, and inference.
-
-Key Features:
-1. Equipment-agnostic normalization
-2. Global statistics for consistent normalization across all data
-3. Training vs inference modes
-4. Statistics persistence for model deployment
-5. Automatic data shape handling
+Module:   data_normalizer
+Purpose:  Provides data normalization tools for EEG signal processing
+Author:   Bruno Rocha
+Created:  2025-01-15
+Notes:    Contains classes for different normalization strategies
+          Used by both training and real-time inference
 """
 
 import numpy as np
-import logging
-from typing import Union, Tuple, Optional, Dict, Any, List
-import pickle
 import os
 import json
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Optional, Tuple, Union, List
 
 
 class UniversalEEGNormalizer:
-    """
-    Universal EEG Data Normalizer for Training and Inference
-    
-    This class provides methods to normalize EEG data consistently across:
-    - Initial model training (fits global statistics)
-    - Fine-tuning (uses global statistics, optionally updates)
-    - Inference (uses frozen global statistics)
-    """
-    
-    def __init__(self, 
-                 method: str = 'zscore',
-                 mode: str = 'training',
-                 stats_path: Optional[str] = None):
-        """
-        Initialize the universal normalizer
-        
-        Args:
-            method: Normalization method ('zscore', 'minmax', 'robust')
-            mode: Operation mode ('training', 'finetuning', 'inference')
-            stats_path: Path to save/load global statistics
-        """
+    """Normalizador universal para dados EEG"""
+
+    def __init__(self, method: str = 'zscore', mode: str = 'training', stats_path: Optional[str] = None):
         self.method = method
         self.mode = mode
         self.stats_path = stats_path
         self.global_stats = {}
         self.is_fitted = False
-        self.data_shape_info = {}
-        
-        # Load existing stats if in finetuning or inference mode
-        if self.mode in ['finetuning', 'inference'] and self.stats_path:
-            self.load_global_stats(self.stats_path)
-        
-        logger.info(f"Initialized UniversalEEGNormalizer - Method: {self.method}, Mode: {self.mode}")
-    
-    def fit_global_stats(self, data_batches: List[np.ndarray]) -> 'UniversalEEGNormalizer':
-        """
-        Fit global statistics across multiple data batches/subjects
-        Used for initial training to establish universal normalization
-        
-        Args:
-            data_batches: List of data arrays from different sources/subjects
-        
-        Returns:
-            self
-        """
-        if self.mode not in ['training', 'finetuning']:
-            logger.warning(f"fit_global_stats called in {self.mode} mode")
-        
-        logger.info(f"Fitting global statistics across {len(data_batches)} data batches")
-        
-        # Collect all data for global statistics
-        all_data = []
-        shape_info = {}
-        
-        for i, data in enumerate(data_batches):
-            data = self._ensure_3d(data)
-            all_data.append(data)
-            
-            # Track shape information
-            shape_key = f"batch_{i}"
-            shape_info[shape_key] = {
-                'original_shape': data.shape,
-                'n_samples': data.shape[0],
-                'n_channels': data.shape[1],
-                'n_timepoints': data.shape[2]
-            }
-        
-        # Concatenate all data for global statistics
-        global_data = np.concatenate(all_data, axis=0)
-        logger.info(f"Global data shape: {global_data.shape}")
-        
-        # Fit normalization method
-        if self.method == 'zscore':
-            self._fit_global_zscore(global_data)
-        elif self.method == 'minmax':
-            self._fit_global_minmax(global_data)
-        elif self.method == 'robust':
-            self._fit_global_robust(global_data)
-        else:
-            raise ValueError(f"Unknown normalization method: {self.method}")
-        
-        self.data_shape_info = shape_info
-        self.is_fitted = True
-        
-        # Save global stats automatically in training mode
-        if self.mode == 'training' and self.stats_path:
-            self.save_global_stats(self.stats_path)
-        
-        logger.info("Global statistics fitted successfully")
-        return self
-    
-    def fit(self, data: np.ndarray) -> 'UniversalEEGNormalizer':
-        """
-        Fit normalizer to single dataset (wrapper for compatibility)
-        
-        Args:
-            data: Training data
-            
-        Returns:
-            self
-        """
-        return self.fit_global_stats([data])
-    
-    def transform(self, data: np.ndarray, update_stats: bool = False) -> np.ndarray:
-        """
-        Transform data using global statistics
-        
-        Args:
-            data: Data to normalize
-            update_stats: Whether to update global stats (only in finetuning mode)
-            
-        Returns:
-            Normalized data
-        """
-        if not self.is_fitted:
-            raise ValueError("Normalizer must be fitted before transform")
-        
-        original_shape = data.shape
-        data_3d = self._ensure_3d(data)
-        
-        # Apply normalization
-        if self.method == 'zscore':
-            normalized = self._transform_zscore(data_3d)
-        elif self.method == 'minmax':
-            normalized = self._transform_minmax(data_3d)
-        elif self.method == 'robust':
-            normalized = self._transform_robust(data_3d)
-        
-        # Update stats if in finetuning mode and requested
-        if update_stats and self.mode == 'finetuning':
-            self._update_global_stats(data_3d)
-        
-        # Restore original shape
-        return self._restore_shape(normalized, original_shape)
-    
-    def fit_transform(self, data: np.ndarray) -> np.ndarray:
-        """
-        Fit normalizer and transform data in one step
-        
-        Args:
-            data: Training data
-            
-        Returns:
-            Normalized data
-        """
-        return self.fit(data).transform(data)
-    
+
+        # Carregar estatísticas pré-calculadas se caminho fornecido
+        if stats_path and os.path.exists(stats_path):
+            self.load_stats(stats_path)
+
     def _ensure_3d(self, data: np.ndarray) -> np.ndarray:
-        """Ensure data is in 3D format (n_samples, n_channels, n_timepoints)"""
+        """Garantir que dados estejam em 3D (n_samples, n_channels, n_timepoints)"""
         if len(data.shape) == 2:
-            # Assume (n_samples, n_features) - reshape to (n_samples, n_channels, n_timepoints)
-            # This is a heuristic - might need adjustment based on actual data
             n_samples, n_features = data.shape
-            if n_features % 16 == 0:  # Assume 16 channels
+            if n_features % 16 == 0:  # Assumir 16 canais
                 n_channels = 16
                 n_timepoints = n_features // n_channels
                 data = data.reshape(n_samples, n_channels, n_timepoints)
             else:
-                # Add channel dimension
                 data = data[:, np.newaxis, :]
         elif len(data.shape) == 1:
-            # Single sample - add sample and channel dimensions
             data = data[np.newaxis, np.newaxis, :]
-            
         return data
-    
-    def _restore_shape(self, data: np.ndarray, original_shape: tuple) -> np.ndarray:
-        """Restore data to original shape"""
-        if len(original_shape) == 2:
-            # Flatten back to 2D
-            return data.reshape(original_shape[0], -1)
-        elif len(original_shape) == 1:
-            # Return as 1D
-            return data.flatten()
-        else:
-            return data
-    
-    def _fit_global_zscore(self, data: np.ndarray):
-        """Fit global Z-score normalization"""
-        # Calculate global statistics across all samples and time, per channel
-        self.global_stats['mean'] = np.mean(data, axis=(0, 2), keepdims=True)  # Shape: (1, n_channels, 1)
-        self.global_stats['std'] = np.std(data, axis=(0, 2), keepdims=True)
-        
-        # Avoid division by zero
-        self.global_stats['std'] = np.where(self.global_stats['std'] == 0, 1.0, self.global_stats['std'])
-        
-        logger.info(f"Global Z-score stats:")
-        logger.info(f"  Mean range: [{np.min(self.global_stats['mean']):.6f}, {np.max(self.global_stats['mean']):.6f}]")
-        logger.info(f"  Std range: [{np.min(self.global_stats['std']):.6f}, {np.max(self.global_stats['std']):.6f}]")
-    
-    def _fit_global_minmax(self, data: np.ndarray):
-        """Fit global Min-max normalization"""
-        self.global_stats['min'] = np.min(data, axis=(0, 2), keepdims=True)
-        self.global_stats['max'] = np.max(data, axis=(0, 2), keepdims=True)
-        
-        # Calculate range and avoid division by zero
-        range_val = self.global_stats['max'] - self.global_stats['min']
-        self.global_stats['range'] = np.where(range_val == 0, 1.0, range_val)
-        
-        logger.info(f"Global MinMax stats:")
-        logger.info(f"  Min range: [{np.min(self.global_stats['min']):.6f}, {np.max(self.global_stats['min']):.6f}]")
-        logger.info(f"  Max range: [{np.min(self.global_stats['max']):.6f}, {np.max(self.global_stats['max']):.6f}]")
-    
-    def _fit_global_robust(self, data: np.ndarray):
-        """Fit global Robust scaling"""
-        self.global_stats['median'] = np.median(data, axis=(0, 2), keepdims=True)
-        self.global_stats['q25'] = np.percentile(data, 25, axis=(0, 2), keepdims=True)
-        self.global_stats['q75'] = np.percentile(data, 75, axis=(0, 2), keepdims=True)
-        
-        # Calculate IQR and avoid division by zero
-        iqr = self.global_stats['q75'] - self.global_stats['q25']
-        self.global_stats['iqr'] = np.where(iqr == 0, 1.0, iqr)
-        
-        logger.info(f"Global Robust stats:")
-        logger.info(f"  Median range: [{np.min(self.global_stats['median']):.6f}, {np.max(self.global_stats['median']):.6f}]")
-        logger.info(f"  IQR range: [{np.min(self.global_stats['iqr']):.6f}, {np.max(self.global_stats['iqr']):.6f}]")
-    
-    def _transform_zscore(self, data: np.ndarray) -> np.ndarray:
-        """Apply global Z-score normalization"""
-        return (data - self.global_stats['mean']) / self.global_stats['std']
-    
-    def _transform_minmax(self, data: np.ndarray) -> np.ndarray:
-        """Apply global Min-max normalization"""
-        return (data - self.global_stats['min']) / self.global_stats['range']
-    
-    def _transform_robust(self, data: np.ndarray) -> np.ndarray:
-        """Apply global Robust scaling"""
-        return (data - self.global_stats['median']) / self.global_stats['iqr']
-    
-    def _update_global_stats(self, new_data: np.ndarray, alpha: float = 0.1):
-        """
-        Update global statistics with new data (for fine-tuning)
-        
-        Args:
-            new_data: New data to incorporate
-            alpha: Learning rate for exponential moving average
-        """
+
+    def fit(self, data: np.ndarray):
+        """Ajustar normalizador aos dados"""
+        # Se já estiver ajustado e não estivermos no modo de treinamento, retorna
+        if self.is_fitted and self.mode != 'training':
+            return self
+            
+        data_3d = self._ensure_3d(data)
+
         if self.method == 'zscore':
-            new_mean = np.mean(new_data, axis=(0, 2), keepdims=True)
-            new_std = np.std(new_data, axis=(0, 2), keepdims=True)
-            
-            self.global_stats['mean'] = (1 - alpha) * self.global_stats['mean'] + alpha * new_mean
-            self.global_stats['std'] = (1 - alpha) * self.global_stats['std'] + alpha * new_std
+            self.global_stats['mean'] = np.mean(data_3d, axis=(0, 2), keepdims=True)
+            self.global_stats['std'] = np.std(data_3d, axis=(0, 2), keepdims=True)
+            # Evitar divisão por zero
             self.global_stats['std'] = np.where(self.global_stats['std'] == 0, 1.0, self.global_stats['std'])
+        elif self.method == 'robust_zscore':
+            self.global_stats['median'] = np.median(data_3d, axis=(0, 2), keepdims=True)
+            q75 = np.percentile(data_3d, 75, axis=(0, 2), keepdims=True)
+            q25 = np.percentile(data_3d, 25, axis=(0, 2), keepdims=True)
+            self.global_stats['iqr'] = q75 - q25
+            # Evitar divisão por zero
+            self.global_stats['iqr'] = np.where(self.global_stats['iqr'] == 0, 1.0, self.global_stats['iqr'])
+        elif self.method == 'minmax':
+            self.global_stats['min'] = np.min(data_3d, axis=(0, 2), keepdims=True)
+            self.global_stats['max'] = np.max(data_3d, axis=(0, 2), keepdims=True)
+            # Evitar divisão por zero
+            range_value = self.global_stats['max'] - self.global_stats['min']
+            self.global_stats['range'] = np.where(range_value == 0, 1.0, range_value)
+
+        self.is_fitted = True
+        
+        # Salvar estatísticas se no modo de treinamento e caminho fornecido
+        if self.mode == 'training' and self.stats_path:
+            self.save_stats(self.stats_path)
             
-        # Similar updates for other methods...
-        logger.info(f"Updated global statistics with alpha={alpha}")
-    
-    def save_global_stats(self, filepath: str):
-        """Save global normalization statistics"""
-        stats_data = {
+        return self
+
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        """Transformar dados"""
+        if not self.is_fitted:
+            raise ValueError("Normalizador deve ser ajustado antes da transformação")
+
+        original_shape = data.shape
+        original_dtype = data.dtype  # CRITICAL: Remember original dtype
+        data_3d = self._ensure_3d(data)
+
+        if self.method == 'zscore':
+            normalized = (data_3d - self.global_stats['mean']) / self.global_stats['std']
+        elif self.method == 'robust_zscore':
+            normalized = (data_3d - self.global_stats['median']) / self.global_stats['iqr']
+        elif self.method == 'minmax':
+            normalized = (data_3d - self.global_stats['min']) / self.global_stats['range']
+
+        # Restaurar forma original
+        if len(original_shape) != len(normalized.shape):
+            if len(original_shape) == 2:
+                normalized = normalized.reshape(original_shape[0], -1)
+            elif len(original_shape) == 1:
+                normalized = normalized.flatten()
+        
+        # CRITICAL: Maintain original dtype (usually float32)
+        return normalized.astype(original_dtype)
+
+    def fit_transform(self, data: np.ndarray) -> np.ndarray:
+        """Ajustar e transformar em um passo"""
+        return self.fit(data).transform(data)
+        
+    def save_stats(self, filepath: str) -> None:
+        """Salvar estatísticas de normalização em arquivo"""
+        # Converter valores do dicionário para formato serializável
+        serializable_stats = {}
+        for key, value in self.global_stats.items():
+            serializable_stats[key] = value.tolist()
+        
+        # Adicionar metadados
+        metadata = {
             'method': self.method,
             'mode': self.mode,
-            'global_stats': {k: v.tolist() if isinstance(v, np.ndarray) else v 
-                           for k, v in self.global_stats.items()},
-            'is_fitted': self.is_fitted,
-            'data_shape_info': self.data_shape_info,
-            'version': '2.0'  # Version for compatibility
+            'created': str(np.datetime64('now')),
+            'format_version': '1.0'
         }
         
-        # Ensure directory exists
-        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        # Combinar dados
+        save_data = {
+            'stats': serializable_stats,
+            'metadata': metadata
+        }
         
-        # Save as JSON for human readability
+        # Garantir que o diretório exista
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        
+        # Salvar para arquivo
         with open(filepath, 'w') as f:
-            json.dump(stats_data, f, indent=2)
-        
-        # Also save binary version for numpy arrays
-        binary_path = filepath.replace('.json', '.pkl')
-        with open(binary_path, 'wb') as f:
-            pickle.dump({
-                'method': self.method,
-                'global_stats': self.global_stats,
-                'is_fitted': self.is_fitted
-            }, f)
-        
-        logger.info(f"Global normalization stats saved to: {filepath}")
+            json.dump(save_data, f, indent=2)
     
-    def load_global_stats(self, filepath: str):
-        """Load global normalization statistics"""
-        # Try JSON first, then pickle
-        if filepath.endswith('.json') and os.path.exists(filepath):
+    def load_stats(self, filepath: str) -> bool:
+        """Carregar estatísticas de normalização de arquivo"""
+        try:
             with open(filepath, 'r') as f:
-                stats_data = json.load(f)
+                data = json.load(f)
             
-            # Convert lists back to numpy arrays
-            self.global_stats = {k: np.array(v) if isinstance(v, list) else v 
-                               for k, v in stats_data['global_stats'].items()}
+            # Extrair estatísticas
+            loaded_stats = data.get('stats', {})
             
+            # Converter listas de volta para arrays numpy com dimensões adequadas
+            for key, value in loaded_stats.items():
+                if isinstance(value, list):
+                    arr = np.array(value)
+                    # Reshape para adicionar keepdims se necessário
+                    if len(arr.shape) == 3:
+                        self.global_stats[key] = arr
+                    else:
+                        self.global_stats[key] = arr.reshape(1, -1, 1)
+            
+            self.is_fitted = True
+            return True
+            
+        except Exception as e:
+            print(f"Erro ao carregar estatísticas de normalização: {e}")
+            return False
+
+
+class ImprovedEEGNormalizer:
+    """Improved EEG normalizer with multiple strategies and validation"""
+
+    def __init__(self, method: str = 'robust_zscore', scope: str = 'channel',
+                 outlier_threshold: float = 3.0):
+        """
+        Args:
+            method: 'robust_zscore', 'minmax', or 'raw_zscore'
+            scope: 'channel', 'trial', or 'global'
+            outlier_threshold: number of deviations to consider outlier
+        """
+        self.method = method
+        self.scope = scope
+        self.outlier_threshold = outlier_threshold
+        self.stats: Dict = {}
+        self.is_fitted = False
+
+    def _handle_outliers(self, X: np.ndarray) -> np.ndarray:
+        """Detect and handle outliers using IQR or standard deviation"""
+        if self.method == 'robust_zscore':
+            Q1 = np.percentile(X, 25, axis=(0, 2), keepdims=True)
+            Q3 = np.percentile(X, 75, axis=(0, 2), keepdims=True)
+            IQR = Q3 - Q1
+            lower = Q1 - self.outlier_threshold * IQR
+            upper = Q3 + self.outlier_threshold * IQR
         else:
-            # Try pickle version
-            pickle_path = filepath.replace('.json', '.pkl')
-            if os.path.exists(pickle_path):
-                with open(pickle_path, 'rb') as f:
-                    stats_data = pickle.load(f)
-                self.global_stats = stats_data['global_stats']
+            mean = np.mean(X, axis=(0, 2), keepdims=True)
+            std = np.std(X, axis=(0, 2), keepdims=True)
+            lower = mean - self.outlier_threshold * std
+            upper = mean + self.outlier_threshold * std
+
+        # Clip extreme values
+        return np.clip(X, lower, upper)
+
+    def fit(self, X: np.ndarray) -> 'ImprovedEEGNormalizer':
+        """Ajusta o normalizador aos dados EXATAMENTE como no notebook"""
+        
+        # Garantir formato 3D
+        if len(X.shape) == 2:
+            if X.shape[1] % 16 == 0:  # Assumir 16 canais
+                n_channels = 16
+                X = X.reshape(X.shape[0], n_channels, -1)
             else:
-                raise FileNotFoundError(f"Stats file not found: {filepath}")
+                X = X[:, np.newaxis, :]
+
+        # CRITICAL: Handle outliers ANTES da normalização (como no notebook)
+        X = self._handle_outliers(X)
+
+        if self.scope == 'channel':
+            if self.method == 'robust_zscore':
+                # CRITICAL: Usar exatamente as mesmas estatísticas do notebook
+                self.stats['median'] = np.median(X, axis=(0, 2), keepdims=True)
+                q75, q25 = np.percentile(X, [75, 25], axis=(0, 2))
+                self.stats['iqr'] = (q75 - q25)[None, :, None] + 1e-8
+
+            elif self.method == 'minmax':
+                self.stats['min'] = X.min(axis=(0, 2), keepdims=True)
+                self.stats['max'] = X.max(axis=(0, 2), keepdims=True)
+
+            else:  # raw_zscore
+                self.stats['mean'] = np.mean(X, axis=(0, 2), keepdims=True)
+                self.stats['std'] = np.std(X, axis=(0, 2), keepdims=True) + 1e-8
+
+        elif self.scope == 'trial':
+            if self.method == 'robust_zscore':
+                self.stats['median'] = np.median(X, axis=2, keepdims=True)
+                q75, q25 = np.percentile(X, [75, 25], axis=2)
+                self.stats['iqr'] = (q75 - q25)[:, :, None] + 1e-8
+
+            elif self.method == 'minmax':
+                self.stats['min'] = X.min(axis=2, keepdims=True)
+                self.stats['max'] = X.max(axis=2, keepdims=True)
+
+            else:  # raw_zscore
+                self.stats['mean'] = np.mean(X, axis=2, keepdims=True)
+                self.stats['std'] = np.std(X, axis=2, keepdims=True) + 1e-8
+
+        self.is_fitted = True
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Transforma dados EXATAMENTE como no notebook"""
+        if not self.is_fitted:
+            raise ValueError("Normalize.fit() deve ser chamado antes de transform()")
+
+        # CRITICAL: Manter dtype original
+        original_dtype = X.dtype
         
-        self.method = stats_data['method']
-        self.is_fitted = stats_data['is_fitted']
+        # Garantir formato 3D
+        original_shape = X.shape
+        if len(X.shape) == 2:
+            if X.shape[1] % 16 == 0:
+                n_channels = 16
+                X = X.reshape(X.shape[0], n_channels, -1)
+            else:
+                X = X[:, np.newaxis, :]
+
+        # Transformação
+        if self.method == 'robust_zscore':
+            X_norm = (X - self.stats['median']) / self.stats['iqr']
+        elif self.method == 'minmax':
+            X_norm = (X - self.stats['min']) / (self.stats['max'] - self.stats['min'] + 1e-8)
+        else:  # raw_zscore
+            X_norm = (X - self.stats['mean']) / self.stats['std']
+
+        # Restaurar forma original
+        if len(original_shape) == 2:
+            X_norm = X_norm.reshape(original_shape)
+
+        # CRITICAL: Manter dtype original
+        return X_norm.astype(original_dtype)
+
+    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+        """Fit to data and transform in one step"""
+        return self.fit(X).transform(X)
+
+    def get_stats(self) -> Dict:
+        """Return normalization statistics"""
+        return self.stats.copy()
+
+
+def validate_normalization(X: np.ndarray, normalized_X: np.ndarray) -> Tuple[bool, Dict]:
+    """Validate normalization quality
+
+    Args:
+        X: Original data
+        normalized_X: Normalized data
+
+    Returns:
+        (is_valid, stats): Boolean indicating if checks passed and statistics
+    """
+    stats = {}
+
+    # 1. Check mean and std
+    stats['mean'] = float(np.mean(normalized_X))
+    stats['std'] = float(np.std(normalized_X))
+
+    # 2. Calculate percentiles
+    stats['percentiles'] = {
+        '1%': float(np.percentile(normalized_X, 1)),
+        '99%': float(np.percentile(normalized_X, 99))
+    }
+
+    # 3. Check preservation of relative order
+    original_order = np.argsort(np.mean(X.reshape(X.shape[0], -1), axis=1))
+    normalized_order = np.argsort(np.mean(normalized_X.reshape(normalized_X.shape[0], -1), axis=1))
+    stats['order_correlation'] = float(np.corrcoef(original_order, normalized_order)[0, 1])
+
+    # 4. Check for outliers
+    z_scores = np.abs((normalized_X - stats['mean']) / stats['std'])
+    stats['outliers_ratio'] = float(np.mean(z_scores > 3))
+
+    # Validation criteria
+    is_valid = (
+        abs(stats['mean']) < 0.1 and            # Mean close to zero
+        abs(stats['std'] - 1.0) < 0.5 and       # Std close to one
+        stats['order_correlation'] > 0.7 and    # Order preserved
+        stats['outliers_ratio'] < 0.01          # Few outliers
+    )
+
+    return is_valid, stats
+
+
+def validate_normalization(normalized_data: np.ndarray) -> bool:
+    # Simple validation: check that the data mean is near 0 and std is near 1
+    if normalized_data.size == 0:
+        return False
+    mean_val = np.mean(normalized_data)
+    std_val = np.std(normalized_data)
+    return np.abs(mean_val) < 0.1 and np.abs(std_val - 1.0) < 0.1
+
+def create_inference_normalizer(stats_path: Optional[str] = None) -> UniversalEEGNormalizer:
+    # Use zscore method in inference mode
+    return UniversalEEGNormalizer(method='zscore', mode='inference', stats_path=stats_path)
+
+def create_universal_normalizer(method: str = 'zscore', mode: str = 'training') -> UniversalEEGNormalizer:
+    # Returns a universal normalizer instance
+    return UniversalEEGNormalizer(method=method, mode=mode)
+
+
+def create_finetuning_normalizer(
+    method: str = 'robust_zscore',
+    stats_path: Optional[str] = None
+) -> ImprovedEEGNormalizer:
+    """
+    Create normalizer specifically for fine-tuning.
+    
+    This is a convenience function that creates an improved normalizer for fine-tuning.
+    
+    Args:
+        method: Normalization method ('robust_zscore', 'raw_zscore', 'minmax')
+        stats_path: Optional path to statistics file
         
-        logger.info(f"Global normalization stats loaded from: {filepath}")
-        logger.info(f"Loaded method: {self.method}, fitted: {self.is_fitted}")
+    Returns:
+        Normalizer configured for fine-tuning
+    """
+    return ImprovedEEGNormalizer(method=method, scope='channel', outlier_threshold=3.0)
 
 
 # Factory function for universal use
 def create_universal_normalizer(method: str = 'zscore', mode: str = 'training', stats_path: Optional[str] = None) -> UniversalEEGNormalizer:
     return UniversalEEGNormalizer(method=method, mode=mode, stats_path=stats_path)
+
+
+def create_finetuning_normalizer(
+    method: str = 'robust_zscore',
+    stats_path: Optional[str] = None
+) -> ImprovedEEGNormalizer:
+    """
+    Create normalizer specifically for fine-tuning.
+    
+    This is a convenience function that creates an improved normalizer for fine-tuning.
+    
+    Args:
+        method: Normalization method ('robust_zscore', 'raw_zscore', 'minmax')
+        stats_path: Optional path to statistics file
+        
+    Returns:
+        Normalizer configured for fine-tuning
+    """
+    return ImprovedEEGNormalizer(method=method, scope='channel', outlier_threshold=3.0)

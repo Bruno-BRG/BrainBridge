@@ -127,132 +127,38 @@ class UniversalEEGNormalizer:
         """
         return self.fit_global_stats([data])
     
-    def transform(self, data: np.ndarray, update_stats: bool = False) -> np.ndarray:
-        """
-        Transform data using global statistics
-        
-        Args:
-            data: Data to normalize
-            update_stats: Whether to update global stats (only in finetuning mode)
-            
-        Returns:
-            Normalized data
-        """
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        """Transform data using calculated statistics"""
         if not self.is_fitted:
-            raise ValueError("Normalizer must be fitted before transform")
+            raise ValueError("Normalize.fit() must be called before transform()")
+
+        # Remember original dtype
+        original_dtype = data.dtype
         
+        # Ensure 3D format
         original_shape = data.shape
-        data_3d = self._ensure_3d(data)
-        
-        # Apply normalization
-        if self.method == 'zscore':
-            normalized = self._transform_zscore(data_3d)
-        elif self.method == 'minmax':
-            normalized = self._transform_minmax(data_3d)
-        elif self.method == 'robust':
-            normalized = self._transform_robust(data_3d)
-        
-        # Update stats if in finetuning mode and requested
-        if update_stats and self.mode == 'finetuning':
-            self._update_global_stats(data_3d)
-        
-        # Restore original shape
-        return self._restore_shape(normalized, original_shape)
-    
-    def fit_transform(self, data: np.ndarray) -> np.ndarray:
-        """
-        Fit normalizer and transform data in one step
-        
-        Args:
-            data: Training data
-            
-        Returns:
-            Normalized data
-        """
-        return self.fit(data).transform(data)
-    
-    def _ensure_3d(self, data: np.ndarray) -> np.ndarray:
-        """Ensure data is in 3D format (n_samples, n_channels, n_timepoints)"""
         if len(data.shape) == 2:
-            # Assume (n_samples, n_features) - reshape to (n_samples, n_channels, n_timepoints)
-            # This is a heuristic - might need adjustment based on actual data
-            n_samples, n_features = data.shape
-            if n_features % 16 == 0:  # Assume 16 channels
+            if data.shape[1] % 16 == 0:
                 n_channels = 16
-                n_timepoints = n_features // n_channels
-                data = data.reshape(n_samples, n_channels, n_timepoints)
+                data = data.reshape(data.shape[0], n_channels, -1)
             else:
-                # Add channel dimension
                 data = data[:, np.newaxis, :]
-        elif len(data.shape) == 1:
-            # Single sample - add sample and channel dimensions
-            data = data[np.newaxis, np.newaxis, :]
-            
-        return data
-    
-    def _restore_shape(self, data: np.ndarray, original_shape: tuple) -> np.ndarray:
-        """Restore data to original shape"""
+
+        # Transform
+        if self.method == 'robust_zscore':
+            normalized = (data - self.stats['median']) / self.stats['iqr']
+        elif self.method == 'minmax':
+            normalized = (data - self.stats['min']) / (data - self.stats['max'] - self.stats['min'] + 1e-8)
+        else:  # raw_zscore
+            normalized = (data - self.stats['mean']) / self.stats['std']
+
+        # Restore original shape if needed
         if len(original_shape) == 2:
-            # Flatten back to 2D
-            return data.reshape(original_shape[0], -1)
-        elif len(original_shape) == 1:
-            # Return as 1D
-            return data.flatten()
-        else:
-            return data
-    
-    def _fit_global_zscore(self, data: np.ndarray):
-        """Fit global Z-score normalization"""
-        # Calculate global statistics across all samples and time, per channel
-        self.global_stats['mean'] = np.mean(data, axis=(0, 2), keepdims=True)  # Shape: (1, n_channels, 1)
-        self.global_stats['std'] = np.std(data, axis=(0, 2), keepdims=True)
-        
-        # Avoid division by zero
-        self.global_stats['std'] = np.where(self.global_stats['std'] == 0, 1.0, self.global_stats['std'])
-        
-        logger.info(f"Global Z-score stats:")
-        logger.info(f"  Mean range: [{np.min(self.global_stats['mean']):.6f}, {np.max(self.global_stats['mean']):.6f}]")
-        logger.info(f"  Std range: [{np.min(self.global_stats['std']):.6f}, {np.max(self.global_stats['std']):.6f}]")
-    
-    def _fit_global_minmax(self, data: np.ndarray):
-        """Fit global Min-max normalization"""
-        self.global_stats['min'] = np.min(data, axis=(0, 2), keepdims=True)
-        self.global_stats['max'] = np.max(data, axis=(0, 2), keepdims=True)
-        
-        # Calculate range and avoid division by zero
-        range_val = self.global_stats['max'] - self.global_stats['min']
-        self.global_stats['range'] = np.where(range_val == 0, 1.0, range_val)
-        
-        logger.info(f"Global MinMax stats:")
-        logger.info(f"  Min range: [{np.min(self.global_stats['min']):.6f}, {np.max(self.global_stats['min']):.6f}]")
-        logger.info(f"  Max range: [{np.min(self.global_stats['max']):.6f}, {np.max(self.global_stats['max']):.6f}]")
-    
-    def _fit_global_robust(self, data: np.ndarray):
-        """Fit global Robust scaling"""
-        self.global_stats['median'] = np.median(data, axis=(0, 2), keepdims=True)
-        self.global_stats['q25'] = np.percentile(data, 25, axis=(0, 2), keepdims=True)
-        self.global_stats['q75'] = np.percentile(data, 75, axis=(0, 2), keepdims=True)
-        
-        # Calculate IQR and avoid division by zero
-        iqr = self.global_stats['q75'] - self.global_stats['q25']
-        self.global_stats['iqr'] = np.where(iqr == 0, 1.0, iqr)
-        
-        logger.info(f"Global Robust stats:")
-        logger.info(f"  Median range: [{np.min(self.global_stats['median']):.6f}, {np.max(self.global_stats['median']):.6f}]")
-        logger.info(f"  IQR range: [{np.min(self.global_stats['iqr']):.6f}, {np.max(self.global_stats['iqr']):.6f}]")
-    
-    def _transform_zscore(self, data: np.ndarray) -> np.ndarray:
-        """Apply global Z-score normalization"""
-        return (data - self.global_stats['mean']) / self.global_stats['std']
-    
-    def _transform_minmax(self, data: np.ndarray) -> np.ndarray:
-        """Apply global Min-max normalization"""
-        return (data - self.global_stats['min']) / self.global_stats['range']
-    
-    def _transform_robust(self, data: np.ndarray) -> np.ndarray:
-        """Apply global Robust scaling"""
-        return (data - self.global_stats['median']) / self.global_stats['iqr']
-    
+            normalized = normalized.reshape(original_shape)
+
+        # CRITICAL: Maintain original dtype
+        return normalized.astype(original_dtype)
+
     def _update_global_stats(self, new_data: np.ndarray, alpha: float = 0.1):
         """
         Update global statistics with new data (for fine-tuning)
@@ -371,6 +277,18 @@ class UniversalEEGNormalizer:
         logger.info(f"Changed mode from {old_mode} to {mode}")
 
 
+# Adding missing ImprovedEEGNormalizer class
+
+class ImprovedEEGNormalizer:
+    def __init__(self):
+        # Initialization code for improved EEG normalization
+        pass
+
+    def normalize(self, data):
+        # ...implement improved normalization logic...
+        return data
+
+
 # Factory functions for different use cases
 def create_training_normalizer(method: str = 'zscore', 
                              stats_path: Optional[str] = None) -> UniversalEEGNormalizer:
@@ -393,7 +311,89 @@ def create_inference_normalizer(stats_path: str) -> UniversalEEGNormalizer:
 # Backward compatibility
 def create_normalizer(method: str = 'zscore') -> UniversalEEGNormalizer:
     """Create normalizer (backward compatibility)"""
-    return create_training_normalizer(method=method)
+    normalizer = create_training_normalizer(method=method)
+    print("Created normalizer for backward compatibility")
+
+
+# Convenience function for batch processing
+def normalize_multiple_datasets(datasets: List[np.ndarray], 
+                              method: str = 'zscore',
+                              stats_path: Optional[str] = None) -> Tuple[List[np.ndarray], UniversalEEGNormalizer]:
+    """
+    Normalize multiple datasets with shared global statistics
+    
+    Args:
+        datasets: List of datasets to normalize
+        method: Normalization method
+        stats_path: Path to save global statistics
+        
+    Returns:
+        Tuple of (normalized_datasets, fitted_normalizer)
+    """
+    normalizer = create_training_normalizer(method=method, stats_path=stats_path)
+    normalizer.fit_global_stats(datasets)
+    
+    normalized_datasets = []
+    for dataset in datasets:
+        normalized = normalizer.transform(dataset)
+        normalized_datasets.append(normalized)
+    
+    return normalized_datasets, normalizer
+
+
+# Validation and utility functions
+def validate_normalization(normalized_data: np.ndarray) -> bool:
+    """Validate normalization output"""
+    if normalized_data.size == 0:
+        return False
+    mean_val = np.mean(normalized_data)
+    std_val = np.std(normalized_data)
+    return np.abs(mean_val) < 0.1 and np.abs(std_val - 1.0) < 0.1
+
+
+def create_inference_normalizer(stats_path: Optional[str] = None) -> UniversalEEGNormalizer:
+    """Create normalizer for inference (frozen stats)"""
+    return UniversalEEGNormalizer(method='zscore', mode='inference', stats_path=stats_path)
+
+
+def create_universal_normalizer(method: str = 'zscore', mode: str = 'training') -> UniversalEEGNormalizer:
+    """Create a universal normalizer instance"""
+    return UniversalEEGNormalizer(method=method, mode=mode)
+
+
+if __name__ == "__main__":
+    # Example usage and testing
+    logging.basicConfig(level=logging.INFO)
+    
+    # Create synthetic EEG data to test
+    np.random.seed(42)
+    
+    # Simulate data from different equipment with different scales
+    data_equipment1 = np.random.normal(0, 50, (100, 16, 125))  # Small scale like S079
+    data_equipment2 = np.random.normal(0, 5000, (100, 16, 125))  # Large scale like S080
+    
+    print("Testing with different equipment data:")
+    print(f"Equipment 1 data range: [{np.min(data_equipment1):.2f}, {np.max(data_equipment1):.2f}]")
+    print(f"Equipment 2 data range: [{np.min(data_equipment2):.2f}, {np.max(data_equipment2):.2f}]")
+    
+    # Test different normalization methods
+    for method in ['zscore', 'minmax', 'robust']:
+        print(f"\n=== Testing {method} normalization ===")
+        
+        # Normalize equipment 1 data
+        normalizer1 = create_normalizer(method)
+        norm_data1 = normalizer1.fit_transform(data_equipment1)
+        
+        # Normalize equipment 2 data
+        normalizer2 = create_normalizer(method)
+        norm_data2 = normalizer2.fit_transform(data_equipment2)
+        
+        print(f"Normalized equipment 1 range: [{np.min(norm_data1):.3f}, {np.max(norm_data1):.3f}]")
+        print(f"Normalized equipment 2 range: [{np.min(norm_data2):.3f}, {np.max(norm_data2):.3f}]")
+        print(f"Normalized equipment 1 mean±std: {np.mean(norm_data1):.3f}±{np.std(norm_data1):.3f}")
+        print(f"Normalized equipment 2 mean±std: {np.mean(norm_data2):.3f}±{np.std(norm_data2):.3f}")
+    """Create normalizer (backward compatibility)"""
+    create_training_normalizer(method=method)
 
 
 # Convenience function for batch processing

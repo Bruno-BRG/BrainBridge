@@ -23,7 +23,12 @@ from torch.utils.data import Dataset, DataLoader
 from scipy import signal
 from sklearn.preprocessing import StandardScaler
 import logging
-from .data_normalizer import UniversalEEGNormalizer, create_training_normalizer, create_finetuning_normalizer
+from .data_normalizer import (
+    UniversalEEGNormalizer, 
+    create_training_normalizer, 
+    create_finetuning_normalizer,
+    ImprovedEEGNormalizer
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -7,3 +7,20 @@ Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
 """
 
 # Data module for BCI project
+from .data_normalizer import (
+    UniversalEEGNormalizer, 
+    ImprovedEEGNormalizer, 
+    validate_normalization,
+    create_training_normalizer,
+    create_finetuning_normalizer,
+    create_inference_normalizer
+)
+
+__all__ = [
+    'UniversalEEGNormalizer',
+    'ImprovedEEGNormalizer', 
+    'validate_normalization',
+    'create_training_normalizer',
+    'create_finetuning_normalizer',
+    'create_inference_normalizer'
+]

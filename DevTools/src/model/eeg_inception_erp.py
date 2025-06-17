@@ -155,6 +155,11 @@ class EEGInceptionERPModel(BaseModel):
             raise ValueError(f"Input tensor x expected to have 2 or 3 dimensions, got {x.dim()}")
         if x.dim() == 2:
             x = x.unsqueeze(0)
+        
+        # CRITICAL: Ensure input is float32 to match model expectations
+        if x.dtype != torch.float32:
+            x = x.float()
+        
         return self._internal_model(x)
     
     def get_features(self, x: torch.Tensor) -> torch.Tensor:
@@ -287,7 +292,7 @@ class EEGInceptionERPModel(BaseModel):
             IOError: If there's an issue writing the file.
         """
         if os.path.isdir(file_path):
-            file_path = os.path.join(file_path, f"{self.name}.pth")
+            file_path = os.path.join(file_path, f"{self.name}.pt")
         
         # Ensure directory exists
         os.makedirs(os.path.dirname(file_path), exist_ok=True)

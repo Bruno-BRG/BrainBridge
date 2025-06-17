@@ -16,8 +16,19 @@ import matplotlib # Import matplotlib like this
 matplotlib.use('Agg') # Then set backend. Must be before importing pyplot.
 import matplotlib.pyplot as plt # Then import pyplot
 from torch.utils.data import DataLoader
-from src.data.data_loader import BCIDataLoader
-from .eeg_inception_erp import EEGInceptionERPModel
+
+# Fix imports to use relative imports within the EndUser package
+try:
+    from ..data.data_loader import BCIDataLoader
+    from .eeg_inception_erp import EEGInceptionERPModel
+except ImportError:
+    # Fallback for direct execution
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+    from data.data_loader import BCIDataLoader
+    from model.eeg_inception_erp import EEGInceptionERPModel
+
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import train_test_split, KFold
 import argparse # Added argparse for CLI argument parsing

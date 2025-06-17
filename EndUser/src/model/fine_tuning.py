@@ -1,448 +1,422 @@
 """
 Class:   ModelFineTuner
-Purpose: Provides fine-tuning capabilities for pre-trained EEG models with patient-specific data.
-Author:  Bruno Rocha
+Purpose: Fine-tuning of pre-trained EEG models with patient-specific data.
+Author:  Bruno Rocha  
 Created: 2025-06-01
 License: BSD (3-clause)
 Notes:   Follows Task Management & Coding Guide for Copilot v2.0.
-         Task 1.1: Create Fine-Tuning Module
+         Migrated and improved from DevTools with exact notebook matching.
 """
 
 import os
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, List, Tuple
 import numpy as np
+from typing import Dict, Optional, Tuple, List, Callable
 from datetime import datetime
-from .eeg_inception_erp import EEGInceptionERPModel
-from datetime import datetime
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class ModelFineTuner:
     """
-    Fine-tuning system for pre-trained EEG models with patient-specific data.
+    Fine-tuning manager for pre-trained EEG models.
     
-    This class provides functionality to load pre-trained models, configure them
-    for transfer learning, and fine-tune on patient-specific recordings.
-    
-    Args:
-        device (torch.device, optional): Device for model operations. Defaults to auto-detect.
-        verbose (bool, optional): Enable verbose logging. Defaults to True.
+    Features:
+    - Load pre-trained models with compatibility checks
+    - Configurable layer freezing strategies  
+    - Patient-specific fine-tuning with proper data handling
+    - Training monitoring and early stopping
+    - Model evaluation and validation
     """
     
-    def __init__(self, device: Optional[torch.device] = None, verbose: bool = True):
-        self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def __init__(self, verbose: bool = True):
+        """
+        Initialize ModelFineTuner.
+        
+        Args:
+            verbose: Enable verbose logging
+        """
         self.verbose = verbose
-        self.model: Optional[EEGInceptionERPModel] = None
-        self.base_model_path: Optional[str] = None
+        self.model = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         if self.verbose:
             print(f"ModelFineTuner initialized on device: {self.device}")
-
-    def load_pretrained_model(self, model_path: str) -> EEGInceptionERPModel:
+    
+    def load_pretrained_model(self, model_path: str) -> bool:
         """
-        Loads a pre-trained EEGInceptionERP model from the specified path.
-        
-        This function loads a model saved during k-fold training and prepares it
-        for fine-tuning on patient-specific data.
+        Load a pre-trained model from file.
         
         Args:
-            model_path (str): Path to the pre-trained model file (.pth format).
-                            Can be either:
-                            - Full path to specific model file (e.g., "models/bom_modelo/eeginceptionerp_fold_final.pth")
-                            - Directory path (will load the "final" model automatically)
-        
+            model_path: Path to the pre-trained model file
+            
         Returns:
-            EEGInceptionERPModel: The loaded pre-trained model ready for fine-tuning.
-        
-        Raises:
-            FileNotFoundError: If the specified model path does not exist.
-            ValueError: If the model file is invalid or incompatible.
-            RuntimeError: If model loading fails due to architecture mismatch.
+            bool: True if model loaded successfully
         """
-        # Determine the actual model file path
-        if os.path.isdir(model_path):
-            # If directory provided, look for the final model
-            model_file = os.path.join(model_path, "eeginceptionerp_fold_final.pth")
-            if not os.path.exists(model_file):
-                raise FileNotFoundError(
-                    f"No final model found in directory {model_path}. "
-                    f"Expected: {model_file}"
-                )
-        elif os.path.isfile(model_path):
-            model_file = model_path
-        else:
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
-        
-        if self.verbose:
-            print(f"Loading pre-trained model from: {model_file}")
-        
         try:
-            # Load the checkpoint to extract model configuration
-            checkpoint = torch.load(model_file, map_location='cpu')
+            if not os.path.exists(model_path):
+                logger.error(f"Model file not found: {model_path}")
+                return False
             
-            # Extract constructor arguments from the saved model
-            constructor_args = checkpoint.get('constructor_args', {})
-            
-            if not constructor_args:
-                raise ValueError(
-                    f"Model file {model_file} does not contain constructor arguments. "
-                    "This model may be incompatible with fine-tuning."
-                )
-            
-            # Create a new model instance with the same architecture
-            model = EEGInceptionERPModel(
-                n_chans=constructor_args.get('n_chans', 16),
-                n_outputs=constructor_args.get('n_outputs', 2),
-                n_times=constructor_args.get('n_times', 400),
-                sfreq=constructor_args.get('sfreq', 125.0),
-                model_name=f"FineTuned_{checkpoint.get('model_name', 'EEGInceptionERP')}",
-                drop_prob=constructor_args.get('drop_prob', 0.5),
-                n_filters=constructor_args.get('n_filters', 8),
-                model_version=checkpoint.get('model_version', '1.0')
-            )
-            
-            # Load the pre-trained weights
-            model.load(model_file)
-            
-            # Move to specified device
-            model = model.to(self.device)
-            
-            # Store reference for future operations
-            self.model = model
-            self.base_model_path = model_file
+            # Load checkpoint
+            checkpoint = torch.load(model_path, map_location='cpu')
             
             if self.verbose:
-                print(f"✅ Successfully loaded pre-trained model:")
-                print(f"   - Architecture: {constructor_args.get('n_chans')} channels, {constructor_args.get('n_times')} time points")
-                print(f"   - Classes: {constructor_args.get('n_outputs')}")
-                print(f"   - Device: {self.device}")
-                print(f"   - Trained status: {model.is_trained}")
+                print(f"Loading model from: {model_path}")
             
-            return model
+            # Extract model parameters from checkpoint
+            if 'model_state_dict' in checkpoint:
+                model_state = checkpoint['model_state_dict']
+                
+                # Get model architecture parameters
+                n_chans = checkpoint.get('n_chans', 16)
+                n_outputs = checkpoint.get('n_outputs', 2) 
+                n_times = checkpoint.get('n_times', 400)
+                sfreq = checkpoint.get('sfreq', 125.0)
+                
+                if self.verbose:
+                    print(f"Model architecture: {n_chans} channels, {n_times} timepoints, {n_outputs} outputs")
+                
+            else:
+                logger.error("Invalid checkpoint format - no model_state_dict found")
+                return False
+            
+            # Try to import EEGInceptionERP from braindecode
+            try:
+                from braindecode.models import EEGInceptionERP
+                
+                # Create model with same architecture
+                self.model = EEGInceptionERP(
+                    n_chans=n_chans,
+                    n_outputs=n_outputs, 
+                    n_times=n_times,
+                    sfreq=sfreq
+                )
+                
+                if self.verbose:
+                    print("✅ Using braindecode EEGInceptionERP")
+                    
+            except ImportError:
+                logger.error("braindecode not available - cannot load EEGInceptionERP model")
+                return False
+            
+            # Load model weights
+            self.model.load_state_dict(model_state)
+            self.model.to(self.device)
+            
+            if self.verbose:
+                print("✅ Pre-trained model loaded successfully")
+            
+            return True
             
         except Exception as e:
-            raise RuntimeError(f"Failed to load pre-trained model from {model_file}: {str(e)}")
-
-    def configure_for_fine_tuning(
-        self, 
-        freeze_layers: str = "early", 
-        learning_rate_ratio: float = 0.1,
-        target_classes: int = 2
+            logger.error(f"Error loading pre-trained model: {e}")
+            return False
+    
+    def fine_tune_model(
+        self,
+        train_loader: torch.utils.data.DataLoader,
+        val_loader: torch.utils.data.DataLoader,
+        test_loader: Optional[torch.utils.data.DataLoader] = None,
+        epochs: int = 30,
+        learning_rate: float = 0.001,
+        learning_rate_ratio: float = 0.3,  # CRITICAL: More aggressive than 0.1
+        early_stopping_patience: int = 5,
+        freeze_strategy: str = "early", 
+        status_callback: Optional[Callable] = None,
+        progress_callback: Optional[Callable] = None,
+        metrics_callback: Optional[Callable] = None
     ) -> Dict[str, any]:
         """
-        Configures the loaded model for fine-tuning with layer freezing strategy.
-        
-        This function implements transfer learning by selectively freezing layers
-        and adjusting learning rates for different parts of the network.
+        Fine-tune the model exactly as in the notebook with corrected parameters.
         
         Args:
-            freeze_layers (str): Strategy for freezing layers. Options:
-                - "early": Freeze early feature extraction layers (recommended)
-                - "most": Freeze all except final classification layers
-                - "none": Don't freeze any layers (full fine-tuning)
-                - "all": Freeze all layers (feature extraction only)
-            learning_rate_ratio (float): Ratio of learning rate for unfrozen layers
-                compared to frozen layers. Defaults to 0.1.
-            target_classes (int): Number of output classes for fine-tuning.
-                If different from original, will modify final layer.
-        
-        Returns:
-            Dict[str, any]: Configuration summary containing:
-                - frozen_params: Number of frozen parameters
-                - trainable_params: Number of trainable parameters
-                - freeze_strategy: Applied freezing strategy
-                - modified_final_layer: Whether final layer was modified
-        
-        Raises:
-            RuntimeError: If no model is loaded or configuration fails.
-            ValueError: If freeze_layers strategy is invalid.
+            train_loader: DataLoader for training data
+            val_loader: DataLoader for validation data
+            test_loader: Optional DataLoader for test data
+            epochs: Maximum number of training epochs
+            learning_rate: Base learning rate
+            learning_rate_ratio: Reduction factor for fine-tuning learning rate
+            early_stopping_patience: Number of epochs to wait before stopping
+            freeze_strategy: Layer freezing strategy (ignored - no actual freezing)
+            status_callback: Optional callback function to report status messages
+            progress_callback: Optional callback function to report progress (0-100)
+            metrics_callback: Optional callback function to report epoch metrics
         """
         if self.model is None:
-            raise RuntimeError(
-                "No model loaded. Please call load_pretrained_model() first."
-            )
-        
-        if freeze_layers not in ["early", "most", "none", "all"]:
-            raise ValueError(
-                f"Invalid freeze_layers strategy: {freeze_layers}. "
-                "Must be one of: 'early', 'most', 'none', 'all'"
-            )
+            raise RuntimeError("No model loaded. Call load_pretrained_model() first.")
         
         if self.verbose:
-            print(f"Configuring model for fine-tuning:")
-            print(f"  - Freeze strategy: {freeze_layers}")
-            print(f"  - Learning rate ratio: {learning_rate_ratio}")
-            print(f"  - Target classes: {target_classes}")
+            print(f"🎯 Fine-tuning with notebook-matched parameters...")
         
-        # Get the internal model for layer access
-        internal_model = self.model._internal_model
+        # Update status if callback provided
+        if status_callback:
+            status_callback("Starting fine-tuning process...")
         
-        # Count original parameters
-        total_params = sum(p.numel() for p in internal_model.parameters())
-          # Apply freezing strategy
-        frozen_params = 0
-        trainable_params = 0
+        # --- Configure model for fine-tuning (EXACTLY as in notebook) ---
+        model = self.model.to(self.device)
         
-        if freeze_layers == "all":
-            # Freeze all parameters
-            for param in internal_model.parameters():
-                param.requires_grad = False
-                frozen_params += param.numel()
-                
-        elif freeze_layers == "none":
-            # Keep all parameters trainable
-            for param in internal_model.parameters():
-                param.requires_grad = True
-                trainable_params += param.numel()
-                
-        elif freeze_layers == "early":
-            # Freeze early layers, keep later layers trainable
-            # This is the recommended approach for transfer learning
-            layer_names = [name for name, _ in internal_model.named_modules()]
-            
-            # For EEGInceptionERP, freeze early feature extraction layers,
-            # keep final classification layers trainable
-            for name, param in internal_model.named_parameters():
-                # Freeze convolutional layers, batch norm, and feature extraction layers
-                if any(layer_type in name.lower() for layer_type in 
-                       ['conv1d', 'conv2d', 'batchnorm', 'temporal_conv', 'spatial_conv', 
-                        'inception', 'features', 'extract']):
-                    param.requires_grad = False
-                    frozen_params += param.numel()
-                # Keep final layers trainable (usually contain 'final', 'classifier', 'fc', 'dense')
-                elif any(layer_type in name.lower() for layer_type in 
-                        ['final', 'classifier', 'fc', 'dense', 'linear']):
-                    param.requires_grad = True
-                    trainable_params += param.numel()
-                else:
-                    # For unknown layers, check if they're in the later part of the network
-                    # by default, keep them trainable for safety
-                    param.requires_grad = True
-                    trainable_params += param.numel()
-                    
-        elif freeze_layers == "most":
-            # Freeze most layers, only keep final classifier trainable
-            for name, param in internal_model.named_parameters():
-                if 'final' in name.lower() or 'classifier' in name.lower() or 'fc' in name.lower():
-                    param.requires_grad = True
-                    trainable_params += param.numel()
-                else:
-                    param.requires_grad = False
-                    frozen_params += param.numel()
+        # CRITICAL: The notebook shows "Froze 0 layers, left 38 trainable"
+        # This means NO layers are actually frozen!
+        frozen_count = 0
+        trainable_count = 0
         
-        # Handle final layer modification if needed
-        modified_final_layer = False
-        current_classes = getattr(internal_model, 'n_outputs', 2)
-        
-        if target_classes != current_classes:
-            if self.verbose:
-                print(f"  - Modifying final layer: {current_classes} -> {target_classes} classes")
-            
-            # This is a simplified approach - in practice, you might need to
-            # identify and replace the specific final layer based on the model architecture
-            # For now, we'll note that modification is needed
-            modified_final_layer = True
-            
-            # Note: Actual implementation would require accessing the specific
-            # final layer of EEGInceptionERP and replacing it
-            if self.verbose:
-                print("    Warning: Final layer modification not yet implemented")
-        
-        # Verify parameter counts
-        actual_trainable = sum(p.numel() for p in internal_model.parameters() if p.requires_grad)
-        actual_frozen = sum(p.numel() for p in internal_model.parameters() if not p.requires_grad)
-        
-        config_summary = {
-            "total_params": total_params,
-            "frozen_params": actual_frozen,
-            "trainable_params": actual_trainable,
-            "freeze_strategy": freeze_layers,
-            "learning_rate_ratio": learning_rate_ratio,
-            "target_classes": target_classes,
-            "modified_final_layer": modified_final_layer
-        }
+        for name, param in model.named_parameters():
+            param.requires_grad = True  # Keep all layers trainable
+            trainable_count += param.numel()
         
         if self.verbose:
-            print(f"✅ Fine-tuning configuration completed:")
-            print(f"   - Total parameters: {total_params:,}")
-            print(f"   - Frozen parameters: {actual_frozen:,} ({actual_frozen/total_params*100:.1f}%)")
-            print(f"   - Trainable parameters: {actual_trainable:,} ({actual_trainable/total_params*100:.1f}%)")
+            print(f"Froze {frozen_count} layers, left {trainable_count} trainable")
         
-        return config_summary
-
-    def prepare_patient_data(
-        self,
-        patient_data_path: str,
-        validation_split: float = 0.2,
-        preprocessing_params: Optional[Dict[str, any]] = None
-    ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, Dict[str, any]]:
-        """
-        Prepares patient-specific EEG data for fine-tuning.
+        if status_callback:
+            status_callback(f"Model prepared: {frozen_count} layers frozen, {trainable_count} trainable")
         
-        This function loads patient recordings, applies preprocessing, and creates
-        train/validation data loaders suitable for fine-tuning.
+        # CRITICAL: Use EXACT learning rate from notebook
+        fine_tune_lr = learning_rate * learning_rate_ratio  # 0.001 * 0.3 = 0.0003
         
-        Args:
-            patient_data_path (str): Path to patient CSV recording files or directory
-                containing multiple recording sessions.
-            validation_split (float): Proportion of data to use for validation.
-                Defaults to 0.2 (20%).
-            preprocessing_params (Dict[str, any], optional): Custom preprocessing parameters.
-                If None, uses default parameters matching the base model training.
-                
-        Returns:
-            Tuple containing:
-                - train_loader (DataLoader): Training data loader
-                - val_loader (DataLoader): Validation data loader  
-                - data_info (Dict[str, any]): Information about loaded data
-                  Raises:
-            FileNotFoundError: If patient data path does not exist.
-            ValueError: If data format is incompatible or insufficient data available.
-            RuntimeError: If preprocessing fails.
-        """
-        # Special handling for mock data during testing
-        is_mock_data = patient_data_path == "mock_patient_data"
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=fine_tune_lr,
+            weight_decay=1e-4  # Add weight decay as in notebook
+        )
         
-        if not is_mock_data and not os.path.exists(patient_data_path):
-            raise FileNotFoundError(f"Patient data path does not exist: {patient_data_path}")
+        # CRITICAL: Add learning rate scheduler as in notebook
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=3, verbose=self.verbose
+        )
         
         if self.verbose:
-            print(f"Preparing patient data from: {patient_data_path}")
-            print(f"Validation split: {validation_split}")
+            print(f"Optimizer configured: lr={fine_tune_lr}")
         
-        # Set default preprocessing parameters to match base model training
-        default_params = {
-            'sample_rate': 125,
-            'n_channels': 16,
-            'window_length': 3.2,  # 400 samples at 125Hz
-            'baseline_length': 1.0,
-            'overlap': 0.5,
-            'lowcut': 0.5,
-            'highcut': 50.0,
-            'notch_freq': 50.0,
-            'batch_size': 10
-        }
-        if preprocessing_params is not None:
-            default_params.update(preprocessing_params)
+        # Loss function
+        criterion = nn.CrossEntropyLoss()
         
-        params = default_params
+        # Training tracking variables
+        best_val_acc = 0.0
+        best_model_state = None
+        patience_counter = 0
+        history = []
         
-        try:
-            # Import BCIDataLoader for patient data processing
-            import sys
-            import os
+        # Fine-tuning loop
+        for epoch in range(epochs):
+            if progress_callback:
+                progress = int((epoch / epochs) * 100 * 0.8)  # 80% of progress bar for training
+                progress_callback(progress)
             
-            # Add the project root to Python path for absolute imports
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            if project_root not in sys.path:
-                sys.path.insert(0, project_root)
+            # --- Training phase ---
+            model.train()
+            train_loss = 0.0
+            train_correct = 0
+            train_total = 0
             
-            from src.data.data_loader import BCIDataLoader, BCIDataset
-            
-            if is_mock_data:
-                # Handle mock data for testing
-                if self.verbose:
-                    print("Using mock patient data for testing")
-            
-            elif os.path.isfile(patient_data_path):
-                # Single file - extract directory and filename
-                data_dir = os.path.dirname(patient_data_path)
-                filename = os.path.basename(patient_data_path)
+            for i, (x_batch, y_batch) in enumerate(train_loader):
+                # CRITICAL: Ensure correct data types
+                x_batch = x_batch.float()
+                y_batch = y_batch.long()
                 
-                # For patient data, we expect a specific CSV format
-                # This is a simplified approach - in practice you'd need to adapt
-                # BCIDataLoader to handle patient-specific CSV formats
-                if self.verbose:
-                    print(f"Loading single patient file: {filename}")
+                # Move batch to device
+                x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
+                
+                # Forward pass
+                optimizer.zero_grad()
+                outputs = model(x_batch)
+                loss = criterion(outputs, y_batch)
+                
+                # Backward pass
+                loss.backward()
+                
+                # CRITICAL: Add gradient clipping as in notebook
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                
+                optimizer.step()
+                
+                # Track metrics
+                train_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                train_total += y_batch.size(0)
+                train_correct += (predicted == y_batch).sum().item()
+            
+            train_loss = train_loss / len(train_loader)
+            train_acc = train_correct / train_total if train_total > 0 else 0
+            
+            # --- Validation phase ---
+            model.eval()
+            val_loss = 0.0
+            val_correct = 0
+            val_total = 0
+            
+            with torch.no_grad():
+                for x_batch, y_batch in val_loader:
+                    # CRITICAL: Ensure correct data types
+                    x_batch = x_batch.float()
+                    y_batch = y_batch.long()
                     
-            elif os.path.isdir(patient_data_path):
-                # Directory with multiple recordings
-                if self.verbose:
-                    print(f"Loading patient recordings from directory")
+                    x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
+                    outputs = model(x_batch)
+                    loss = criterion(outputs, y_batch)
                     
-                # List available CSV files
-                csv_files = [f for f in os.listdir(patient_data_path) if f.endswith('.csv')]
-                if not csv_files:
-                    raise ValueError(f"No CSV files found in {patient_data_path}")
-                    
-                if self.verbose:
-                    print(f"Found {len(csv_files)} CSV files: {csv_files}")
+                    val_loss += loss.item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    val_total += y_batch.size(0)
+                    val_correct += (predicted == y_batch).sum().item()
             
-            # For now, create a simplified data loader
-            # In practice, you'd need a specialized PatientDataLoader
-            # that can handle the patient-specific CSV format
+            val_loss = val_loss / len(val_loader)
+            val_acc = val_correct / val_total if val_total > 0 else 0
             
-            # Create mock data for testing (this would be replaced with actual patient data loading)
-            if self.verbose:
-                print("⚠️  Using mock patient data for testing - implement actual patient data loading")
+            # CRITICAL: Update learning rate based on validation performance
+            scheduler.step(val_acc)
             
-            # Generate mock patient data matching the expected format
-            n_samples = 1000  # Number of windows
-            n_channels = params['n_channels']
-            n_times = int(params['window_length'] * params['sample_rate'])  # 400 time points
-            
-            # Create synthetic patient data (in practice, load from CSV)
-            mock_windows = np.random.randn(n_samples, n_channels, n_times).astype(np.float32)
-            mock_labels = np.random.randint(0, 2, n_samples)  # Binary classification
-            
-            # Apply train/validation split
-            from sklearn.model_selection import train_test_split
-            
-            X_train, X_val, y_train, y_val = train_test_split(
-                mock_windows, mock_labels,
-                test_size=validation_split,
-                random_state=42,
-                stratify=mock_labels
-            )
-            
-            # Create datasets
-            train_dataset = BCIDataset(X_train, y_train, augment=True)
-            val_dataset = BCIDataset(X_val, y_val, augment=False)
-            
-            # Create data loaders
-            train_loader = torch.utils.data.DataLoader(
-                train_dataset,
-                batch_size=params['batch_size'],
-                shuffle=True,
-                num_workers=0  # Windows compatibility
-            )
-            
-            val_loader = torch.utils.data.DataLoader(
-                val_dataset,
-                batch_size=params['batch_size'],
-                shuffle=False,
-                num_workers=0
-            )
-            
-            # Prepare data information
-            data_info = {
-                'total_samples': n_samples,
-                'train_samples': len(X_train),
-                'val_samples': len(X_val),
-                'n_channels': n_channels,
-                'n_times': n_times,
-                'validation_split': validation_split,
-                'class_distribution_train': np.bincount(y_train),
-                'class_distribution_val': np.bincount(y_val),
-                'preprocessing_params': params,
-                'data_source': patient_data_path
+            # Store epoch results
+            epoch_metrics = {
+                'epoch': epoch + 1,
+                'train_loss': train_loss,
+                'train_accuracy': train_acc,
+                'val_loss': val_loss,
+                'val_accuracy': val_acc,
+                'learning_rate': optimizer.param_groups[0]['lr']
             }
+            history.append(epoch_metrics)
+            
+            # Report metrics if callback provided
+            if metrics_callback:
+                metrics_callback(epoch_metrics)
+            
+            if status_callback:
+                status_callback(f"Epoch {epoch+1}/{epochs}: Val Acc: {val_acc:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
             
             if self.verbose:
-                print(f"✅ Patient data prepared successfully:")
-                print(f"   - Total samples: {data_info['total_samples']}")
-                print(f"   - Training samples: {data_info['train_samples']}")
-                print(f"   - Validation samples: {data_info['val_samples']}")
-                print(f"   - Data shape: ({n_channels} channels, {n_times} time points)")
-                print(f"   - Train class distribution: {data_info['class_distribution_train']}")
-                print(f"   - Val class distribution: {data_info['class_distribution_val']}")
+                print(f"Epoch {epoch+1}/{epochs} - "
+                      f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
+                      f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, "
+                      f"LR: {optimizer.param_groups[0]['lr']:.6f}")
             
-            return train_loader, val_loader, data_info
+            # Early stopping check (using EXACT same logic as notebook)
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_model_state = model.state_dict().copy()  # CRITICAL: Use .copy()
+                patience_counter = 0
+                
+                if self.verbose:
+                    print(f"  ✨ New best model: Val Acc {val_acc:.4f}")
+            else:
+                patience_counter += 1
+                if patience_counter >= early_stopping_patience:
+                    if self.verbose:
+                        print(f"  ⏹️ Early stopping triggered after {epoch+1} epochs")
+                    
+                    if status_callback:
+                        status_callback(f"Early stopping: best val acc {best_val_acc:.4f}")
+                    
+                    break
+        
+        # --- Test evaluation (if test_loader provided) ---
+        test_acc = 0.0
+        test_loss = 0.0
+        all_predictions = []
+        all_true_labels = []
+        
+        if test_loader and best_model_state:
+            if progress_callback:
+                progress_callback(90)  # 90% complete
+                
+            if status_callback:
+                status_callback("Evaluating on test set...")
+                
+            # Load best model
+            model.load_state_dict(best_model_state)
+            model.eval()
             
-        except Exception as e:
-            raise RuntimeError(f"Failed to prepare patient data: {str(e)}")
+            test_correct = 0
+            test_total = 0
+            
+            with torch.no_grad():
+                for x_batch, y_batch in test_loader:
+                    # CRITICAL: Ensure correct data types
+                    x_batch = x_batch.float()
+                    y_batch = y_batch.long()
+                    
+                    x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
+                    outputs = model(x_batch)
+                    loss = criterion(outputs, y_batch)
+                    
+                    test_loss += loss.item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    test_total += y_batch.size(0)
+                    test_correct += (predicted == y_batch).sum().item()
+                    
+                    # Store predictions and true labels
+                    all_predictions.extend(predicted.cpu().numpy())
+                    all_true_labels.extend(y_batch.cpu().numpy())
+            
+            test_loss = test_loss / len(test_loader)
+            test_acc = test_correct / test_total if test_total > 0 else 0
+            
+            if self.verbose:
+                print(f"Test Accuracy: {test_acc:.4f}, Test Loss: {test_loss:.4f}")
+        
+        # Store model state for future use
+        if best_model_state:
+            self.model.load_state_dict(best_model_state)
+        
+        if progress_callback:
+            progress_callback(100)  # 100% complete
+            
+        if status_callback:
+            status_callback(f"Fine-tuning completed - Best val acc: {best_val_acc:.4f}")
+        
+        # Prepare and return results
+        results = {
+            "best_model_state": best_model_state,
+            "best_val_accuracy": float(best_val_acc),
+            "final_test_accuracy": float(test_acc) if test_loader else None,
+            "test_loss": float(test_loss) if test_loader else None,
+            "history": history,
+            "epochs_trained": len(history),
+            "early_stopping_triggered": patience_counter >= early_stopping_patience,
+            "predictions": all_predictions,
+            "true_labels": all_true_labels,
+            "timestamp": datetime.now().isoformat(),
+            "fine_tune_lr": fine_tune_lr
+        }
+        
+        return results
 
+
+# Create a simple fine-tuning function for backward compatibility
+def fine_tune_model_simple(model_path: str, 
+                          train_loader: torch.utils.data.DataLoader,
+                          val_loader: torch.utils.data.DataLoader,
+                          epochs: int = 30,
+                          learning_rate: float = 0.0003) -> Dict:
+    """
+    Simple fine-tuning function for backward compatibility.
+    
+    Args:
+        model_path: Path to pre-trained model
+        train_loader: Training data loader
+        val_loader: Validation data loader
+        epochs: Number of training epochs
+        learning_rate: Learning rate for fine-tuning
+        
+    Returns:
+        Dictionary with fine-tuning results
+    """
+    fine_tuner = ModelFineTuner(verbose=True)
+    
+    if not fine_tuner.load_pretrained_model(model_path):
+        raise RuntimeError(f"Failed to load model from {model_path}")
+    
+    return fine_tuner.fine_tune_model(
+        train_loader=train_loader,
+        val_loader=val_loader,
+        epochs=epochs,
+        learning_rate=learning_rate
+    )
+        
     def validate_fine_tuned_model(
         self,
         validation_data_loader: torch.utils.data.DataLoader,

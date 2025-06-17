@@ -703,58 +703,83 @@ class PatientDataManager:
         Returns:
             Tuple of (train_loader, val_loader, metadata)
         """
-        from src.data.data_normalizer import create_universal_normalizer
-        normalizer = create_universal_normalizer(method='zscore', mode='training', stats_path="global_stats.json")
+        # CRITICAL: Use the EXACT same normalizer as training
+        from src.data.data_normalizer import ImprovedEEGNormalizer
+        
+        # Use EXACT same parameters as the main training
+        normalizer = ImprovedEEGNormalizer(
+            method='robust_zscore',    # EXACT same as training
+            scope='channel',           # EXACT same as training
+            outlier_threshold=3.0      # EXACT same as training
+        )
         
         # Load patient recordings
         all_data, all_labels = self.load_patient_recordings(None, preprocessing_params)
         
-        # Split data (stratified)
-        X_train, X_val, y_train, y_val = train_test_split(
-            all_data, all_labels, 
-            test_size=validation_split, 
+        # CRITICAL: Apply the SAME normalization approach as training
+        all_data_normalized = normalizer.fit_transform(all_data)
+        
+        # CRITICAL: Use the EXACT same split strategy as notebook
+        # 70% train, 15% val, 15% test
+        X_train, X_temp, y_train, y_temp = train_test_split(
+            all_data_normalized, all_labels, 
+            test_size=0.30,  # 30% for temp (val+test)
             stratify=all_labels, 
-            random_state=42
+            random_state=42  # EXACT same seed as training
         )
         
-        combined = np.concatenate([X_train, X_val])
-        combined = normalizer.fit_transform(combined)
+        X_val, X_test, y_val, y_test = train_test_split(
+            X_temp, y_temp,
+            test_size=0.50,  # 50% of 30% = 15% total
+            stratify=y_temp,
+            random_state=42  # EXACT same seed as training
+        )
         
-        # Debug: Save normalized fine tuning data as CSV for inspection
-        import os, pandas as pd
-        debug_folder = os.path.join("debug", "normalized_finetuning")
-        os.makedirs(debug_folder, exist_ok=True)
-        combined_flat = combined.reshape(combined.shape[0], -1)
-        pd.DataFrame(combined_flat).to_csv(os.path.join(debug_folder, "normalized_combined_finetuning.csv"), index=False)
-        
-        train_length = len(X_train)
-        X_train_norm = combined[:train_length]
-        X_val_norm = combined[train_length:]
-        
-        # Create PyTorch datasets
+        # Create PyTorch datasets with EXACT same augmentation strategy
         train_dataset = BCIDataset(
-            data=torch.FloatTensor(X_train_norm),
-            labels=torch.LongTensor(y_train)
+            data=torch.FloatTensor(X_train),
+            labels=torch.LongTensor(y_train),
+            augment=True  # CRITICAL: Only train gets augmentation
         )
         
         val_dataset = BCIDataset(
-            data=torch.FloatTensor(X_val_norm),
-            labels=torch.LongTensor(y_val)
+            data=torch.FloatTensor(X_val),
+            labels=torch.LongTensor(y_val),
+            augment=False  # CRITICAL: No augmentation for validation
         )
+        
+        test_dataset = BCIDataset(
+            data=torch.FloatTensor(X_test),
+            labels=torch.LongTensor(y_test),
+            augment=False  # CRITICAL: No augmentation for test
+        )
+        
+        # CRITICAL: Use EXACT same batch size as training (8 for fine-tuning)
+        batch_size = 8  # Notebook uses batch_size=8 for fine-tuning
         
         # Create DataLoaders
         train_loader = DataLoader(
             train_dataset,
-            batch_size=32,
+            batch_size=batch_size,
             shuffle=True,
-            drop_last=True
+            drop_last=True,  # CRITICAL: Drop last incomplete batch
+            num_workers=0    # Windows compatibility
         )
         
         val_loader = DataLoader(
             val_dataset,
-            batch_size=32,
+            batch_size=batch_size,
             shuffle=False,
-            drop_last=False
+            drop_last=False,
+            num_workers=0
+        )
+        
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            drop_last=False,
+            num_workers=0
         )
         
         # Metadata summary
@@ -762,14 +787,19 @@ class PatientDataManager:
             'total_samples': len(all_data),
             'train_samples': len(X_train),
             'val_samples': len(X_val),
+            'test_samples': len(X_test),
             'n_channels': preprocessing_params.get('n_channels', 16),
             'sample_rate': preprocessing_params.get('sample_rate', 125),
             'window_length': preprocessing_params.get('window_length', 3.2),
             'baseline_length': preprocessing_params.get('baseline_length', 1.0),
             'overlap': preprocessing_params.get('overlap', 0.5),
+            'batch_size': batch_size,
+            'normalization_method': 'robust_zscore',
+            'normalization_scope': 'channel',
             'label_distribution': {
                 'train': np.bincount(y_train).tolist(),
-                'val': np.bincount(y_val).tolist()
+                'val': np.bincount(y_val).tolist(),
+                'test': np.bincount(y_test).tolist()
             }
         }
         
@@ -777,12 +807,94 @@ class PatientDataManager:
             print(f"Prepared patient data: {metadata['total_samples']} total samples")
             print(f"  - Training: {metadata['train_samples']} samples")
             print(f"  - Validation: {metadata['val_samples']} samples")
-            print(f"  - Channels: {metadata['n_channels']}")
-            print(f"  - Sample rate: {metadata['sample_rate']} Hz")
-            print(f"  - Window length: {metadata['window_length']} s")
-            print(f"  - Baseline length: {metadata['baseline_length']} s")
-            print(f"  - Overlap: {metadata['overlap']}")
+            print(f"  - Test: {metadata['test_samples']} samples")
+            print(f"  - Batch size: {metadata['batch_size']}")
+            print(f"  - Normalization: {metadata['normalization_method']} ({metadata['normalization_scope']})")
             print(f"  - Training label distribution: {metadata['label_distribution']['train']}")
             print(f"  - Validation label distribution: {metadata['label_distribution']['val']}")
+            print(f"  - Test label distribution: {metadata['label_distribution']['test']}")
         
-        return train_loader, val_loader, metadata
+        return train_loader, val_loader, test_loader, metadata
+    
+    def prepare_data_loaders(self):
+        """Prepare data loaders EXATAMENTE como no notebook"""
+        from sklearn.model_selection import train_test_split
+        
+        # Load patient recordings
+        X, y = self.patient_manager.load_patient_recordings(
+            self.fine_tuning_params['session_ids']
+        )
+        
+        print(f"🔍 Dados do fine-tuning: {X.shape[0]} amostras")
+        print(f"📊 Distribuição: {np.bincount(y)}")
+        
+        # CRITICAL: Normalização EXATA do notebook
+        from src.data.data_normalizer import ImprovedEEGNormalizer
+        
+        normalizer = ImprovedEEGNormalizer(
+            method='robust_zscore',
+            scope='channel',
+            outlier_threshold=3.0
+        )
+        
+        X_normalized = normalizer.fit_transform(X)
+        
+        # CRITICAL: Split strategy baseada no notebook
+        # O notebook usa 70/15/15 mas adapta para poucos dados
+        if len(X) < 50:
+            # Para poucos dados: 60/20/20
+            X_train, X_temp, y_train, y_temp = train_test_split(
+                X_normalized, y, test_size=0.4, random_state=42, stratify=y
+            )
+            X_val, X_test, y_val, y_test = train_test_split(
+                X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp
+            )
+            batch_size = 4  # Batch pequeno para poucos dados
+            print("📦 Poucos dados: split 60/20/20, batch=4")
+        else:
+            # Para dados suficientes: 70/15/15
+            X_train, X_temp, y_train, y_temp = train_test_split(
+                X_normalized, y, test_size=0.3, random_state=42, stratify=y
+            )
+            X_val, X_test, y_val, y_test = train_test_split(
+                X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp
+            )
+            batch_size = 8  # Batch normal
+            print("📦 Dados suficientes: split 70/15/15, batch=8")
+        
+        print(f"📊 Split final: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
+        
+        # Create datasets EXATAMENTE como no notebook
+        from src.data.data_loader import BCIDataset
+        
+        # CRITICAL: Augmentation apenas no treino
+        train_dataset = BCIDataset(X_train, y_train, augment=True)
+        val_dataset = BCIDataset(X_val, y_val, augment=False)
+        test_dataset = BCIDataset(X_test, y_test, augment=False)
+        
+        # CRITICAL: DataLoaders com configurações do notebook
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, 
+            batch_size=batch_size,
+            shuffle=True,
+            drop_last=True,  # CRITICAL: Drop last incomplete batch
+            num_workers=0
+        )
+        
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, 
+            batch_size=batch_size,
+            shuffle=False,
+            drop_last=False,
+            num_workers=0
+        )
+        
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            drop_last=False,
+            num_workers=0
+        )
+        
+        return train_loader, val_loader, test_loader

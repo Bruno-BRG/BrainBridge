@@ -73,20 +73,10 @@ class MainWindow(QMainWindow):
         }
         # Initialize training parameters cache / config
         self.training_params_config = {
-            "use_default_params": True,
-            "model_name": "unnamed_model", # Add model_name here
-            # Placeholder for custom params
-            "epochs": 50, # Default from CLI
-            "k_folds": 5, # Default from CLI
-            "learning_rate": 0.001, # Default from CLI
-            "early_stopping_patience": 5, # Default from CLI
-            "batch_size": 32, # Default from CLI
-            "test_split_size": 0.2, # Default from CLI
-            "train_subject_ids": "all" # Default to all loaded subjects
+            "model_name": "eeg_inception_openbci_cv10",  # Nome padrão igual ao notebook
+            # NOTA: Todos os outros parâmetros estão FIXADOS no TrainingThread
+            # para garantir reprodutibilidade exata do notebook
         }
-
-        # References to custom param input fields
-        self.custom_param_inputs = {}
 
         # Main widget and layout
         self.central_widget = QWidget()
@@ -95,16 +85,21 @@ class MainWindow(QMainWindow):
 
         # Tab widget for different sections
         self.tabs = QTabWidget()
-        self.main_layout.addWidget(self.tabs)        # Create tabs
-        self.data_tab = DataManagementTab(self) # Use the new class
-        self.training_tab = TrainingTab(self) # Use the new TrainingTab class
-        self.fine_tuning_tab = FineTuningTab() # Add Fine-Tuning tab
-        self.pylsl_tab = PylslTab(self) # Instantiate PylslTab
+        self.main_layout.addWidget(self.tabs)
+        
+        # Create tabs
+        self.data_tab = DataManagementTab(self)
+        self.training_tab = TrainingTab(self)
+        self.fine_tuning_tab = FineTuningTab()
+        self.pylsl_tab = PylslTab(self)
 
         self.tabs.addTab(self.data_tab, "Data Management")
         self.tabs.addTab(self.training_tab, "Model Training")
-        self.tabs.addTab(self.fine_tuning_tab, "Fine-Tuning") # Add Fine-Tuning tab
-        self.tabs.addTab(self.pylsl_tab, "OpenBCI Live (PyLSL)") # Add PylslTab instance
+        self.tabs.addTab(self.fine_tuning_tab, "Fine-Tuning")
+        self.tabs.addTab(self.pylsl_tab, "OpenBCI Live (PyLSL)")
+
+        # Initialize custom parameter inputs for backward compatibility
+        self.custom_param_inputs = {}  # CRITICAL: Add missing attribute
 
         # Exit button
         self.exit_button = QPushButton("Exit Application")
@@ -127,5 +122,20 @@ def start_gui():
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     main_win = MainWindow()
+    main_win.show()
+    sys.exit(app.exec_())
+    super().closeEvent(event)
+
+def start_gui():
+    app = QApplication(sys.argv)
+    main_window = MainWindow()
+    main_window.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    main_win = MainWindow()
+    main_win.show()
+    sys.exit(app.exec_())
     main_win.show()
     sys.exit(app.exec_())

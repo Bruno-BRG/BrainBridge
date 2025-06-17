@@ -18,11 +18,13 @@ import numpy as np
 import traceback
 import csv
 import datetime
+import torch
+import glob
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QLabel, QPushButton, QTextEdit, QHBoxLayout,
-    QMessageBox, QFileDialog
+    QMessageBox, QFileDialog, QComboBox, QSlider, QCheckBox, QSpinBox
 )
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 from collections import deque
 from typing import Optional
 
@@ -42,6 +44,17 @@ except ImportError:
     StreamInlet = None
     resolve_streams = None
 
+# Model imports for inference
+try:
+    from src.model.eeg_inception_erp import EEGInceptionERPModel
+    from src.model.realtime_inference import RealTimeInferenceProcessor
+    MODEL_IMPORTS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Model imports not available for inference: {e}")
+    MODEL_IMPORTS_AVAILABLE = False
+    EEGInceptionERPModel = None
+    RealTimeInferenceProcessor = None
+
 class PylslTab(QWidget):
     """
     Manages the Pylsl Tab in the main GUI application.
@@ -49,6 +62,7 @@ class PylslTab(QWidget):
     This class is responsible for setting up the UI elements related to LSL stream
     interaction, handling user actions (e.g., start/stop stream),
     and managing the LSL data inlet and plotting timer for real-time visualization.
+    Supports both Recording mode (saves CSV data) and Inference mode (real-time prediction).
     """
     def __init__(self, parent_main_window):
         """
@@ -70,7 +84,14 @@ class PylslTab(QWidget):
             layout.addWidget(error_label)
             layout.addWidget(install_label)
             layout.addStretch()
-            return
+            return        # Initialize mode variables
+        self.current_mode = "recording"  # "recording" or "inference"
+        self.inference_processor = None
+        self.confidence_threshold = 0.7  # Default threshold
+        self.inference_window_size = 400  # Changed from 600 to 400 samples
+        self.available_models = []
+        self.selected_model_path = None
+        self.loaded_model = None
 
         # Simplified UI setup directly in __init__
         self._setup_pylsl_ui(layout)
@@ -84,8 +105,29 @@ class PylslTab(QWidget):
         Args:
             layout (QVBoxLayout): The main QVBoxLayout of the PylslTab.
         """
-        # Recording setup group
-        recording_setup_group = QGroupBox("Recording Setup")
+        # Mode selection group
+        mode_group = QGroupBox("Operation Mode")
+        mode_layout = QHBoxLayout()
+        
+        self.mode_recording_btn = QPushButton("Recording Mode")
+        self.mode_inference_btn = QPushButton("Inference Mode")
+        self.mode_recording_btn.setCheckable(True)
+        self.mode_inference_btn.setCheckable(True)
+        self.mode_recording_btn.setChecked(True)  # Default to recording mode
+        
+        self.mode_status_label = QLabel("Mode: Recording")
+        self.mode_status_label.setStyleSheet("padding: 5px; background-color: #e6f3ff; border: 1px solid #0066cc; font-weight: bold;")
+        
+        mode_layout.addWidget(self.mode_recording_btn)
+        mode_layout.addWidget(self.mode_inference_btn)
+        mode_layout.addWidget(self.mode_status_label)
+        mode_layout.addStretch()
+        
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+        
+        # Recording setup group (only visible in recording mode)
+        self.recording_setup_group = QGroupBox("Recording Setup")
         recording_setup_layout = QVBoxLayout()
         
         folder_selection_layout = QHBoxLayout()
@@ -96,8 +138,41 @@ class PylslTab(QWidget):
         folder_selection_layout.addWidget(self.selected_folder_label)
         recording_setup_layout.addLayout(folder_selection_layout)
         
-        recording_setup_group.setLayout(recording_setup_layout)
-        layout.addWidget(recording_setup_group)
+        self.recording_setup_group.setLayout(recording_setup_layout)
+        layout.addWidget(self.recording_setup_group)
+        
+        # Inference setup group (only visible in inference mode)
+        self.inference_setup_group = QGroupBox("Inference Setup")
+        inference_setup_layout = QVBoxLayout()
+        
+        # Model selection
+        model_selection_layout = QHBoxLayout()
+        model_selection_layout.addWidget(QLabel("Model:"))
+        self.model_combo = QComboBox()
+        self.refresh_models_btn = QPushButton("Refresh Models")
+        model_selection_layout.addWidget(self.model_combo)
+        model_selection_layout.addWidget(self.refresh_models_btn)
+        inference_setup_layout.addLayout(model_selection_layout)
+        
+        # Confidence threshold
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QLabel("Confidence Threshold:"))
+        self.threshold_slider = QSlider(Qt.Horizontal)
+        self.threshold_slider.setRange(50, 95)  # 0.5 to 0.95
+        self.threshold_slider.setValue(70)  # Default 0.7
+        self.threshold_label = QLabel("0.70")
+        threshold_layout.addWidget(self.threshold_slider)
+        threshold_layout.addWidget(self.threshold_label)
+        inference_setup_layout.addLayout(threshold_layout)
+        
+        # Inference results display
+        self.inference_result_label = QLabel("Prediction: Waiting for data...")
+        self.inference_result_label.setStyleSheet("padding: 10px; background-color: #f9f9f9; border: 2px solid #ddd; font-size: 14px; font-weight: bold;")
+        inference_setup_layout.addWidget(self.inference_result_label)
+        
+        self.inference_setup_group.setLayout(inference_setup_layout)
+        self.inference_setup_group.setVisible(False)  # Hidden by default
+        layout.addWidget(self.inference_setup_group)
         
         # Stream connection group
         connection_group = QGroupBox("Stream Connection")
@@ -140,18 +215,16 @@ class PylslTab(QWidget):
         viz_controls_layout.addWidget(self.pylsl_channel_display)
         viz_controls_layout.addWidget(self.pylsl_sample_rate)
         viz_controls_layout.addWidget(self.pylsl_buffer_size)
-        visualization_layout.addLayout(viz_controls_layout)
-
-        # Annotation controls
-        annotation_controls_layout = QHBoxLayout()
-        self.record_left_btn = QPushButton("Record: Left (T1) - 600 samples")
-        self.record_right_btn = QPushButton("Record: Right (T2) - 600 samples")
+        visualization_layout.addLayout(viz_controls_layout)        # Annotation controls (only visible in recording mode)
+        self.annotation_controls_layout = QHBoxLayout()
+        self.record_left_btn = QPushButton("Record: Left (T1) - 400 samples")
+        self.record_right_btn = QPushButton("Record: Right (T2) - 400 samples")
         self.record_left_btn.setEnabled(False)
         self.record_right_btn.setEnabled(False)
         
-        annotation_controls_layout.addWidget(self.record_left_btn)
-        annotation_controls_layout.addWidget(self.record_right_btn)
-        visualization_layout.addLayout(annotation_controls_layout)
+        self.annotation_controls_layout.addWidget(self.record_left_btn)
+        self.annotation_controls_layout.addWidget(self.record_right_btn)
+        visualization_layout.addLayout(self.annotation_controls_layout)
         
         # Annotation status
         self.annotation_status_label = QLabel("Annotation Status: None")
@@ -175,21 +248,264 @@ class PylslTab(QWidget):
         self.csv_writer = None
         self.recording_folder = None
         self.sample_index = 0
-        self.recording_start_time = None
-          # Annotation tracking variables
+        self.recording_start_time = None          # Annotation tracking variables
         self.current_annotation = ""
         self.annotation_samples_remaining = 0
-        self.annotation_duration_samples = 600  # Duration for T1 and T2 annotations
+        self.annotation_duration_samples = 400  # Changed from 600 to 400 samples
         self.add_t0_next_sample = False  # Flag to add T0 after annotation window ends
           # Connect signals
+        # Mode switching
+        self.mode_recording_btn.clicked.connect(self.switch_to_recording_mode)
+        self.mode_inference_btn.clicked.connect(self.switch_to_inference_mode)
+        
+        # Recording mode signals
         self.select_folder_btn.clicked.connect(self.select_recording_folder)
-        self.pylsl_start_btn.clicked.connect(self.start_pylsl_stream)
-        self.pylsl_stop_btn.clicked.connect(self.stop_pylsl_stream)
-        self.pylsl_refresh_btn.clicked.connect(self.refresh_pylsl_streams)
         self.record_left_btn.clicked.connect(lambda: self.start_annotation("T1"))
         self.record_right_btn.clicked.connect(lambda: self.start_annotation("T2"))
         
+        # Inference mode signals
+        self.refresh_models_btn.clicked.connect(self.refresh_available_models)
+        self.model_combo.currentTextChanged.connect(self.select_model)
+        self.threshold_slider.valueChanged.connect(self.update_threshold)
+        
+        # Common signals
+        self.pylsl_start_btn.clicked.connect(self.start_pylsl_stream)
+        self.pylsl_stop_btn.clicked.connect(self.stop_pylsl_stream)
+        self.pylsl_refresh_btn.clicked.connect(self.refresh_pylsl_streams)
+        
+        # Initialize UI
         self.refresh_pylsl_streams()  # Auto-refresh streams on load
+        self.refresh_available_models()  # Load available models
+
+    # ===== MODE MANAGEMENT FUNCTIONS =====
+    
+    def switch_to_recording_mode(self):
+        """Switch to recording mode."""
+        self.current_mode = "recording"
+        self.mode_recording_btn.setChecked(True)
+        self.mode_inference_btn.setChecked(False)
+        self.mode_status_label.setText("Mode: Recording")
+        self.mode_status_label.setStyleSheet("padding: 5px; background-color: #e6f3ff; border: 1px solid #0066cc; font-weight: bold;")
+        
+        # Show recording controls, hide inference controls
+        self.recording_setup_group.setVisible(True)
+        self.inference_setup_group.setVisible(False)
+        
+        # Update button texts
+        self.pylsl_start_btn.setText("Start LSL Stream & Recording")
+        self.pylsl_stop_btn.setText("Stop Stream & Recording")
+        
+        # Show annotation controls
+        for i in range(self.annotation_controls_layout.count()):
+            widget = self.annotation_controls_layout.itemAt(i).widget()
+            if widget:
+                widget.setVisible(True)
+        
+        # Update start button availability
+        if hasattr(self, 'pylsl_info_text'):
+            self.refresh_pylsl_streams()
+        
+        print("Switched to Recording Mode")
+    
+    def switch_to_inference_mode(self):
+        """Switch to inference mode."""
+        self.current_mode = "inference"
+        self.mode_recording_btn.setChecked(False)
+        self.mode_inference_btn.setChecked(True)
+        self.mode_status_label.setText("Mode: Inference")
+        self.mode_status_label.setStyleSheet("padding: 5px; background-color: #e6ffe6; border: 1px solid #00cc00; font-weight: bold;")
+        
+        # Show inference controls, hide recording controls
+        self.recording_setup_group.setVisible(False)
+        self.inference_setup_group.setVisible(True)
+        
+        # Update button texts
+        self.pylsl_start_btn.setText("Start LSL Stream & Inference")
+        self.pylsl_stop_btn.setText("Stop Stream & Inference")
+        
+        # Hide annotation controls
+        for i in range(self.annotation_controls_layout.count()):
+            widget = self.annotation_controls_layout.itemAt(i).widget()
+            if widget:
+                widget.setVisible(False)
+        
+        # Update start button availability
+        if hasattr(self, 'pylsl_info_text'):
+            self.refresh_pylsl_streams()
+        
+        print("Switched to Inference Mode")
+    
+    # ===== MODEL MANAGEMENT FUNCTIONS =====
+    
+    def refresh_available_models(self):
+        """Refresh the list of available models."""
+        if not MODEL_IMPORTS_AVAILABLE:
+            self.model_combo.clear()
+            self.model_combo.addItem("Model imports not available")
+            return
+        
+        self.model_combo.clear()
+        self.available_models = []
+        
+        # Search for model files in the models directory
+        models_base_dir = os.path.join(project_root, "models")
+        
+        if os.path.exists(models_base_dir):
+            # Search for .pt files in subdirectories
+            model_patterns = [
+                os.path.join(models_base_dir, "**", "*.pt"),
+                os.path.join(models_base_dir, "*.pt")
+            ]
+            
+            for pattern in model_patterns:
+                for model_path in glob.glob(pattern, recursive=True):
+                    relative_path = os.path.relpath(model_path, models_base_dir)
+                    self.available_models.append(model_path)
+                    self.model_combo.addItem(relative_path)
+        
+        if len(self.available_models) == 0:
+            self.model_combo.addItem("No models found")
+        
+        print(f"Found {len(self.available_models)} available models")
+    
+    def select_model(self, model_name):
+        """Select a model for inference."""
+        if not self.available_models or model_name == "No models found" or model_name == "Model imports not available":
+            self.selected_model_path = None
+            return
+        
+        try:
+            # Find the full path for the selected model
+            selected_index = self.model_combo.currentIndex()
+            if 0 <= selected_index < len(self.available_models):
+                self.selected_model_path = self.available_models[selected_index]
+                print(f"Selected model: {self.selected_model_path}")
+                
+                # Update start button availability
+                self.refresh_pylsl_streams()
+        except Exception as e:
+            print(f"Error selecting model: {e}")
+            self.selected_model_path = None
+    
+    def load_model_for_inference(self, n_channels, sample_rate):
+        """Load the selected model for inference."""
+        if not self.selected_model_path or not MODEL_IMPORTS_AVAILABLE:
+            return False
+        
+        try:
+            # Create model instance with appropriate parameters
+            # Using default parameters - adjust as needed based on your training
+            n_times = self.inference_window_size  # 400 samples
+            
+            self.loaded_model = EEGInceptionERPModel(
+                n_chans=n_channels,
+                n_outputs=2,  # Left vs Right hand
+                n_times=n_times,
+                sfreq=sample_rate
+            )
+            
+            # Load model weights
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            checkpoint = torch.load(self.selected_model_path, map_location=device)
+            
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict):
+                if 'model_state_dict' in checkpoint:
+                    self.loaded_model.load_state_dict(checkpoint['model_state_dict'])
+                elif 'state_dict' in checkpoint:
+                    self.loaded_model.load_state_dict(checkpoint['state_dict'])
+                else:
+                    self.loaded_model.load_state_dict(checkpoint)
+            else:
+                self.loaded_model.load_state_dict(checkpoint)
+            
+            self.loaded_model.eval()
+            
+            # Create inference processor
+            self.inference_processor = RealTimeInferenceProcessor(
+                model=self.loaded_model,
+                n_channels=n_channels,
+                sample_rate=sample_rate,
+                window_size=self.inference_window_size,
+                filter_enabled=True
+            )
+            
+            print(f"Successfully loaded model: {os.path.basename(self.selected_model_path)}")
+            return True
+            
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            QMessageBox.critical(self, "Model Loading Error", f"Failed to load model: {str(e)}")
+            self.loaded_model = None
+            self.inference_processor = None
+            return False
+    
+    def update_threshold(self, value):
+        """Update confidence threshold from slider."""
+        self.confidence_threshold = value / 100.0  # Convert to 0.0-1.0 range
+        self.threshold_label.setText(f"{self.confidence_threshold:.2f}")
+    
+    def process_inference(self, samples):
+        """Process samples for inference and update UI."""
+        if not self.inference_processor:
+            return
+        
+        try:
+            # Run inference
+            result = self.inference_processor.predict(samples)
+            
+            if result['status'] == 'success':
+                prediction = result['prediction']
+                confidence = result['confidence']
+                
+                # Apply confidence threshold
+                if confidence < self.confidence_threshold:
+                    display_prediction = "UNCERTAIN"
+                    color = "#ffcc99"  # Orange for uncertain
+                    border_color = "#ff9900"
+                else:
+                    display_prediction = prediction.upper().replace('_', ' ')
+                    if prediction == "left_hand":
+                        color = "#ccffcc"  # Light green for left
+                        border_color = "#00aa00"
+                    else:  # right_hand
+                        color = "#ccccff"  # Light blue for right
+                        border_color = "#0000aa"
+                
+                # Update inference result display
+                self.inference_result_label.setText(
+                    f"Prediction: {display_prediction} (Confidence: {confidence:.2f})"
+                )
+                self.inference_result_label.setStyleSheet(
+                    f"padding: 10px; background-color: {color}; border: 2px solid {border_color}; "
+                    f"font-size: 14px; font-weight: bold;"
+                )
+                
+                # Print to console for debugging
+                left_prob = result['class_probabilities']['left_hand']
+                right_prob = result['class_probabilities']['right_hand']
+                print(f"Inference: {display_prediction} | Left: {left_prob:.3f}, Right: {right_prob:.3f} | Confidence: {confidence:.3f}")
+                
+            elif result['status'] == 'insufficient_data':
+                self.inference_result_label.setText("Prediction: Collecting data...")
+                self.inference_result_label.setStyleSheet(
+                    "padding: 10px; background-color: #f0f0f0; border: 2px solid #ccc; "
+                    "font-size: 14px; font-weight: bold;"
+                )
+            else:
+                self.inference_result_label.setText(f"Prediction: Error - {result.get('message', 'Unknown error')}")
+                self.inference_result_label.setStyleSheet(
+                    "padding: 10px; background-color: #ffcccc; border: 2px solid #cc0000; "
+                    "font-size: 14px; font-weight: bold;"
+                )
+                
+        except Exception as e:
+            print(f"Error during inference processing: {e}")
+            self.inference_result_label.setText("Prediction: Processing Error")
+            self.inference_result_label.setStyleSheet(
+                "padding: 10px; background-color: #ffcccc; border: 2px solid #cc0000; "
+                "font-size: 14px; font-weight: bold;"
+            )
 
     def select_recording_folder(self):
         """Select folder where CSV recordings will be saved."""
@@ -223,9 +539,11 @@ class PylslTab(QWidget):
                     info_text += f"  {i+1}. {stream.name()} - {stream.channel_count()} channels @ {stream.nominal_srate()} Hz\\n"
             else:
                 info_text += "No EEG streams found. Make sure your EEG device is streaming to LSL."
-            self.pylsl_info_text.setPlainText(info_text)
-            # Enable start button only if both folder is selected and EEG streams are available
-            self.pylsl_start_btn.setEnabled(len(eeg_streams) > 0 and self.recording_folder is not None)
+            self.pylsl_info_text.setPlainText(info_text)            # Enable start button based on current mode
+            if self.current_mode == "recording":
+                self.pylsl_start_btn.setEnabled(len(eeg_streams) > 0 and self.recording_folder is not None)
+            else:  # inference mode
+                self.pylsl_start_btn.setEnabled(len(eeg_streams) > 0 and self.selected_model_path is not None)
         except Exception as e:
             self.pylsl_info_text.setPlainText(f"Error refreshing streams: {str(e)}")
             self.pylsl_start_btn.setEnabled(False)
@@ -431,20 +749,25 @@ class PylslTab(QWidget):
                 self.csv_file = None
                 self.csv_writer = None
                 QMessageBox.information(self, "Recording Stopped", "CSV recording has been saved and stopped.")
-            except Exception as e:
-                QMessageBox.critical(self, "Recording Error", f"Error stopping CSV recording: {str(e)}")
+            except Exception as e:                QMessageBox.critical(self, "Recording Error", f"Error stopping CSV recording: {str(e)}")
 
     def start_pylsl_stream(self):
         """
-        Starts an LSL EEG stream and begins CSV recording.
+        Starts an LSL EEG stream for either recording or inference mode.
         """
         if not PYLSL_AVAILABLE:
             QMessageBox.warning(self, "PyLSL Not Available", "PyLSL is not installed. Please install it with: pip install pylsl")
             return
             
-        if not self.recording_folder:
-            QMessageBox.warning(self, "No Folder Selected", "Please select a recording folder before starting the stream.")
-            return
+        # Check mode-specific requirements
+        if self.current_mode == "recording":
+            if not self.recording_folder:
+                QMessageBox.warning(self, "No Folder Selected", "Please select a recording folder before starting the stream.")
+                return
+        else:  # inference mode
+            if not self.selected_model_path:
+                QMessageBox.warning(self, "No Model Selected", "Please select a model before starting inference.")
+                return
             
         try:
             streams = resolve_streams(wait_time=1.0)
@@ -475,19 +798,36 @@ class PylslTab(QWidget):
             self.last_sample_time = None
             self.consecutive_empty_pulls = 0
             
-            # Start CSV recording
-            self.start_csv_recording(n_channels)
+            # Mode-specific initialization
+            if self.current_mode == "recording":
+                # Start CSV recording
+                self.start_csv_recording(n_channels)
+                message_suffix = "Recording"
+                self.record_left_btn.setEnabled(True)
+                self.record_right_btn.setEnabled(True)
+            else:  # inference mode
+                # Load model for inference
+                if not self.load_model_for_inference(n_channels, self.current_sample_rate):
+                    return  # Error message already shown in load_model_for_inference
+                message_suffix = "Inference"
+                self.inference_result_label.setText("Prediction: Collecting data...")
+                self.inference_result_label.setStyleSheet(
+                    "padding: 10px; background-color: #f0f0f0; border: 2px solid #ccc; "
+                    "font-size: 14px; font-weight: bold;"                )
             
             self.pylsl_channel_display.setText(f"Channels: {n_channels}")
             self.pylsl_sample_rate.setText(f"Sample Rate: {self.current_sample_rate:.2f} Hz")
             self.pylsl_buffer_size.setText(f"Buffer: {buffer_size} samples")
-            self.pylsl_status_label.setText("Status: Connected & Recording")
+            self.pylsl_status_label.setText(f"Status: Connected & {message_suffix}")
             self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ccffcc;")
             
             self.pylsl_start_btn.setEnabled(False)
             self.pylsl_stop_btn.setEnabled(True)
-            self.record_left_btn.setEnabled(True)
-            self.record_right_btn.setEnabled(True)
+            
+            # Only enable annotation buttons in recording mode
+            if self.current_mode == "recording":
+                self.record_left_btn.setEnabled(True)
+                self.record_right_btn.setEnabled(True)
             
             # Faster timer for more responsive updates
             self.pylsl_timer.start(int(1000 / 30))  # Increased to 30 FPS from 25 FPS
@@ -496,49 +836,65 @@ class PylslTab(QWidget):
                                   f"Successfully connected to EEG stream: {info.name()}\\n"
                                   f"Channels: {n_channels}\\n"
                                   f"Sample Rate: {self.current_sample_rate:.2f} Hz\\n"
-                                  f"Recording to: {self.recording_folder}")
-        except Exception as e:
-            QMessageBox.critical(self, "Stream Error", f"Failed to start stream: {str(e)}\\n{traceback.format_exc()}")
+                                  f"Mode: {message_suffix}")
+        except Exception as e:            QMessageBox.critical(self, "Stream Error", f"Failed to start stream: {str(e)}\\n{traceback.format_exc()}")
 
     def stop_pylsl_stream(self):
         """
-        Stops the currently active LSL stream and CSV recording.
+        Stops the currently active LSL stream and recording/inference.
         """
         try:
             self.pylsl_timer.stop()
-              # Stop CSV recording first
-            self.stop_csv_recording()
+            
+            # Mode-specific cleanup
+            if self.current_mode == "recording":
+                # Stop CSV recording
+                self.stop_csv_recording()
+                self.annotation_status_label.setText("Annotation Status: None")
+                self.annotation_status_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
+            else:  # inference mode
+                # Clean up inference processor
+                self.inference_processor = None
+                self.loaded_model = None
+                self.inference_result_label.setText("Prediction: Stopped")
+                self.inference_result_label.setStyleSheet(
+                    "padding: 10px; background-color: #f0f0f0; border: 2px solid #ccc; "
+                    "font-size: 14px; font-weight: bold;"
+                )
             
             if self.pylsl_inlet:
                 self.pylsl_inlet.close_stream()
             self.pylsl_inlet = None
             self.pylsl_buffer = None
             self.pylsl_time_buffer = None
-              # Reset annotation tracking
+            
+            # Reset annotation tracking
             self.current_annotation = ""
             self.annotation_samples_remaining = 0
             self.add_t0_next_sample = False
+            
             self.pylsl_status_label.setText("Status: Disconnected")
             self.pylsl_status_label.setStyleSheet("padding: 5px; background-color: #ffcccc;")
             
-            # Reset annotation status label
-            self.annotation_status_label.setText("Annotation Status: None")
-            self.annotation_status_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
-            
             self.pylsl_plot_canvas.clear_plot()
             
-            self.pylsl_start_btn.setEnabled(self.recording_folder is not None)
+            # Update button availability based on mode
+            if self.current_mode == "recording":
+                self.pylsl_start_btn.setEnabled(self.recording_folder is not None)
+            else:  # inference mode
+                self.pylsl_start_btn.setEnabled(self.selected_model_path is not None)
+            
             self.pylsl_stop_btn.setEnabled(False)
             self.record_left_btn.setEnabled(False)
             self.record_right_btn.setEnabled(False)
             
-            QMessageBox.information(self, "Stream Stopped", "LSL stream disconnected and recording saved.")
-        except Exception as e:
-            QMessageBox.critical(self, "Stop Error", f"Error stopping stream: {str(e)}\\n{traceback.format_exc()}")
+            mode_text = "Recording" if self.current_mode == "recording" else "Inference"
+            QMessageBox.information(self, "Stream Stopped", f"LSL stream disconnected and {mode_text.lower()} stopped.")
+        except Exception as e:            QMessageBox.critical(self, "Stop Error", f"Error stopping stream: {str(e)}\\n{traceback.format_exc()}")
 
     def update_pylsl_plot(self):
         """
-        Pulls new data from the LSL stream, updates the plot, and writes to CSV.
+        Pulls new data from the LSL stream, updates the plot, and processes data based on current mode.
         """
         if not self.pylsl_inlet or self.pylsl_buffer is None:
             return
@@ -552,8 +908,13 @@ class PylslTab(QWidget):
                 for sample_group in samples:
                     self.pylsl_buffer.append(sample_group)
                 
-                # Write samples to CSV
-                self.write_samples_to_csv(samples)
+                # Mode-specific processing
+                if self.current_mode == "recording":
+                    # Write samples to CSV
+                    self.write_samples_to_csv(samples)
+                else:  # inference mode
+                    # Process samples for inference
+                    self.process_inference(np.array(samples))
                 
                 # Update visualization
                 self._update_visualization_plot()
@@ -578,9 +939,7 @@ class PylslTab(QWidget):
 
                 if plot_data_samples_channels.size == 0:
                     self.pylsl_plot_canvas.clear_plot()
-                    return
-
-                # Transpose to (num_channels, num_samples)
+                    return                # Transpose to (num_channels, num_samples)
                 plot_data_channels_samples = plot_data_samples_channels.T
                 
                 max_channels_to_display = 16
@@ -591,7 +950,8 @@ class PylslTab(QWidget):
                     data_to_plot = plot_data_channels_samples
                 
                 if data_to_plot.size > 0:
-                    self.pylsl_plot_canvas.plot(data_to_plot, title="Real-time EEG Data (Recording Active)")
+                    mode_text = "Recording Active" if self.current_mode == "recording" else "Inference Active"
+                    self.pylsl_plot_canvas.plot(data_to_plot, title=f"Real-time EEG Data ({mode_text})")
                 else:
                     self.pylsl_plot_canvas.clear_plot()
             except Exception as e:
