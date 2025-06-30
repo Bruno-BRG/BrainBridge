@@ -7,26 +7,27 @@ import torch.nn as nn
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 import logging
-from pathlib import Path
+# from pathlib import Path  # Removed unused import
 import queue
 import threading
 import time
-from scipy import signal
+# from scipy import signal  # Removed unused import
 from collections import deque
 
 logger = logging.getLogger(__name__)
 
-# Import model from braindecode if available
+# Import our custom EEGNet model
 try:
-    from braindecode.models import EEGInceptionERP
-    BRAINDECODE_AVAILABLE = True
+    from eegnet_model import create_eegnet_model  # Removed unused EEGNetWrapper
+    EEGNET_AVAILABLE = True
+    logger.info("✅ EEGNet personalizado disponível")
 except ImportError:
-    BRAINDECODE_AVAILABLE = False
-    logger.warning("Braindecode not available, using fallback CNN")
+    EEGNET_AVAILABLE = False
+    logger.warning("⚠️ EEGNet personalizado não encontrado, usando CNN fallback")
 
-class EEGInceptionERPModel(nn.Module):
-    """Wrapper para EEGInceptionERP com fallback para CNN simples - mesma arquitetura do notebook"""
-
+class EEGInferenceModel(nn.Module):
+    """Modelo unificado para inferência EEG usando EEGNet personalizado"""
+    
     def __init__(self, n_chans: int, n_outputs: int, n_times: int, sfreq: float = 125.0, **kwargs):
         super().__init__()
         self.n_chans = n_chans
@@ -34,21 +35,21 @@ class EEGInceptionERPModel(nn.Module):
         self.n_times = n_times
         self.sfreq = sfreq
         self.is_trained = False
-
-        if BRAINDECODE_AVAILABLE:
+        
+        if EEGNET_AVAILABLE:
             try:
-                # Import here to avoid scoping issues
-                from braindecode.models import EEGInceptionERP
-                self.model = EEGInceptionERP(
+                # Usar nosso EEGNet personalizado
+                self.model = create_eegnet_model(
                     n_chans=n_chans,
                     n_outputs=n_outputs,
                     n_times=n_times,
-                    sfreq=sfreq
+                    sfreq=sfreq,
+                    **kwargs
                 )
-                self.model_type = "EEGInceptionERP"
-                logger.info(f"✅ Usando EEGInceptionERP: {n_chans} canais, {n_times} pontos temporais")
+                self.model_type = "EEGNet"
+                logger.info(f"✅ Usando EEGNet personalizado: {n_chans} canais, {n_times} pontos temporais")
             except Exception as e:
-                logger.warning(f"⚠️ Erro ao criar EEGInceptionERP: {e}")
+                logger.warning(f"⚠️ Erro ao criar EEGNet: {e}")
                 self.model = self._create_fallback_cnn(n_chans, n_outputs, n_times)
                 self.model_type = "FallbackCNN"
         else:
@@ -150,7 +151,7 @@ class EEGInferenceEngine:
         try:
             logger.info(f"Loading model from {self.model_path}")
             checkpoint = torch.load(self.model_path, map_location=self.device)
-            
+
             # Extract model parameters from checkpoint
             if 'constructor_args' in checkpoint:
                 params = checkpoint['constructor_args']
@@ -170,16 +171,16 @@ class EEGInferenceEngine:
                 self.drop_prob = params.get('drop_prob', 0.5)
                 self.n_filters = params.get('n_filters', 8)
                 logger.info(f"Loaded model parameters: n_chans={self.n_chans}, n_times={self.n_times}, sfreq={self.sample_rate}")
-            
+
             # Create model
-            self.model = EEGInceptionERPModel(
+            self.model = EEGInferenceModel(
                 n_chans=self.n_chans,
                 n_outputs=self.n_outputs,
                 n_times=self.n_times,
                 sfreq=self.sample_rate
             )
             logger.info(f"Created model with {self.n_chans} channels, {self.n_times} time points")
-            
+
             # Load state dict with compatibility handling
             state_dict = None
             if 'model_state_dict' in checkpoint:
@@ -198,28 +199,23 @@ class EEGInferenceEngine:
                 if "size mismatch" in str(e):
                     logger.warning(f"Size mismatch detected: {e}")
                     logger.info("Attempting to load with strict=False")
-                    
+
                     # Load with strict=False to ignore mismatched layers
-                    missing_keys, unexpected_keys = self.model.load_state_dict(state_dict, strict=False)
-                    
-                    if missing_keys:
-                        logger.warning(f"Missing keys: {missing_keys}")
-                    if unexpected_keys:
-                        logger.warning(f"Unexpected keys: {unexpected_keys}")
+                    self.model.load_state_dict(state_dict, strict=False)
                 else:
                     raise e
-            
+
             self.model.to(self.device)
             self.model.eval()
-              # Load normalization statistics
+            # Load normalization statistics
             if 'normalization_stats' in checkpoint:
                 self.normalizer_stats = checkpoint['normalization_stats']
                 logger.info("Loaded normalization statistics")
-            
+
             self.is_loaded = True
             logger.info("Model loaded successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             return False
