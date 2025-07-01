@@ -297,8 +297,9 @@ class ReinforcementBCISystem:
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.model.to(self.device)
             
-            # IMPORTANTE: Modelo deve estar em modo de treino para reforço
-            self.model.train()
+            # IMPORTANTE: Modelo deve estar em modo eval para predições (evita erro BatchNorm)
+            # Só colocamos em train mode durante o gradient update
+            self.model.eval()
             
             # Configurar optimizer para aprendizado online
             self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
@@ -422,15 +423,21 @@ class ReinforcementBCISystem:
         
         # Normalizar
         normalized = self.normalize_data(eeg_data)
+        logger.info(f"🔍 Debug - EEG data shape: {eeg_data.shape}")
+        logger.info(f"🔍 Debug - Normalized shape: {normalized.shape}")
         
-        # Para tensor
-        tensor = torch.from_numpy(normalized).float().unsqueeze(0).to(self.device)
+        # Para tensor - garantir formato correto (batch, channels, height, width)
+        # normalized tem shape (16, 400), precisamos (1, 1, 16, 400)
+        tensor = torch.from_numpy(normalized).float().unsqueeze(0).unsqueeze(0).to(self.device)
+        logger.info(f"🔍 Debug - Tensor shape: {tensor.shape}")
         
-        # Forward pass
-        output = self.model(tensor)
-        probs = torch.softmax(output, dim=1)
-        prediction = torch.argmax(output, dim=1).item()
-        confidence = torch.max(probs, dim=1)[0].item()
+        # Forward pass em modo eval para BatchNorm (mas mantendo gradientes)
+        self.model.eval()  # Coloca BatchNorm em eval mode
+        with torch.no_grad():  # Desabilita gradientes apenas para predição
+            output = self.model(tensor)
+            probs = torch.softmax(output, dim=1)
+            prediction = torch.argmax(output, dim=1).item()
+            confidence = torch.max(probs, dim=1)[0].item()
         
         processing_time = time.time() - start_time
         
@@ -442,8 +449,9 @@ class ReinforcementBCISystem:
         # - True label não é None (ou seja, não é T0/repouso)
         # - Confiança > threshold
         if true_label is not None and confidence > self.confidence_threshold:
-            # 3. APLICAR REFORÇO
-            reinforced = self.apply_reinforcement(tensor, true_label)
+            # 3. APLICAR REFORÇO - criar novo tensor sem no_grad para gradientes
+            train_tensor = torch.from_numpy(normalized).float().unsqueeze(0).unsqueeze(0).to(self.device)
+            reinforced = self.apply_reinforcement(train_tensor, true_label)
         
         # 4. LOG E ESTATÍSTICAS
         self.total_predictions += 1
@@ -468,13 +476,17 @@ class ReinforcementBCISystem:
         try:
             self.reinforcement_attempts += 1
             
-            # Colocar modelo em modo treino
-            self.model.train()
+            logger.info(f"🔍 Debug - Tensor shape no reforço: {tensor.shape}")
+            
+            # SOLUÇÃO PARA BATCH SIZE: usar eval mode para BatchNorm durante forward pass
+            # e apenas fazer update dos gradientes
+            self.model.eval()  # Manter BatchNorm em eval mode
             
             # Zero gradients
             self.optimizer.zero_grad()
             
-            # Forward pass
+            # Forward pass com gradientes habilitados mas BatchNorm em eval mode
+            tensor.requires_grad_(True)
             output = self.model(tensor)
             
             # Calcular loss

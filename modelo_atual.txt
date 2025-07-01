@@ -1,4 +1,4 @@
-Modelo: custom_eegnet_1751259706.pt
-CV: 0.8250 ± 0.1179
-Teste: 0.9750
-Uso: python test_lsl_to_prediction_cycle.py
+Modelo: custom_eegnet_1751326409.pt
+CV: 0.9750 ± 0.0234
+Teste: 1.0000
+Arquitetura: EEGNet\nUso: python test_lsl_to_prediction_cycle.py
