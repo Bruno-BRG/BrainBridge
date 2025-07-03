@@ -1,6 +1,0 @@
-Modelo: custom_eegnet_1751389051.pt
-CV: 0.7305 ± 0.0158
-Teste: 0.7007
-Arquitetura: EEGNet
-Dataset: 3510 trials CSV de 78 sujeitos
-Uso: python test_lsl_to_prediction_cycle.py

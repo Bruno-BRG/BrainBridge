@@ -400,7 +400,7 @@ class RealTimeUDPConverter:
         header_lines = [
             "%OpenBCI Raw EXG Data",
             "%Number of channels = 16", 
-            "%Sample Rate = 250 Hz",
+            "%Sample Rate = 125 Hz",
             "%Board = OpenBCI_GUI$BoardCytonSerialDaisy"
         ]
         

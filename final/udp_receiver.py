@@ -40,20 +40,13 @@ class UDPReceiver:
         """
         self.data_callback = callback
     
-    def start(self, callback: Optional[Callable[[Any], None]] = None):
+    def start(self):
         """
         Inicia o receptor UDP em uma thread separada
-        
-        Args:
-            callback: Função opcional que será chamada quando dados forem recebidos
         """
         if self.is_running:
             logger.warning("Receptor UDP já está rodando")
             return
-        
-        # Definir callback se fornecido
-        if callback:
-            self.set_callback(callback)
             
         try:
             # Criar socket UDP
