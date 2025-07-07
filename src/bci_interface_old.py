@@ -35,14 +35,6 @@ import matplotlib.animation as animation
 # Importar configuração de caminhos
 from config import get_recording_path, get_database_path, ensure_folders_exist
 
-# Importar o logger OpenBCI
-try:
-    from openbci_csv_logger import OpenBCICSVLogger
-    USE_OPENBCI_LOGGER = True
-except ImportError:
-    USE_OPENBCI_LOGGER = False
-    print("OpenBCI Logger não encontrado, usando logger simples")
-
 class SimpleCSVLogger:
     """Logger CSV simples para dados EEG com suporte a marcadores"""
     
@@ -685,8 +677,6 @@ class StreamingWidget(QWidget):
         self.csv_logger = None
         self.is_recording = False
         self.current_patient_id = None
-        self.pending_marker = None  # Para marcadores pendentes no logger OpenBCI
-        self.baseline_timer = QTimer()  # Timer para baseline
         self.setup_ui()
         
     def setup_ui(self):
@@ -725,24 +715,12 @@ class StreamingWidget(QWidget):
         recording_group = QGroupBox("Gravação")
         recording_layout = QVBoxLayout()
         
-        # Primeira linha - seleção de paciente e tarefa
+        # Primeira linha - seleção de paciente e controle de gravação
         recording_row1 = QHBoxLayout()
         
         self.patient_combo = QComboBox()
         self.refresh_patients_btn = QPushButton("Atualizar")
         self.refresh_patients_btn.clicked.connect(self.refresh_patients)
-        
-        self.task_input = QLineEdit()
-        self.task_input.setPlaceholderText("Ex: motor_imagery, rest, baseline")
-        
-        recording_row1.addWidget(QLabel("Paciente:"))
-        recording_row1.addWidget(self.patient_combo)
-        recording_row1.addWidget(self.refresh_patients_btn)
-        recording_row1.addWidget(QLabel("Tarefa:"))
-        recording_row1.addWidget(self.task_input)
-        
-        # Segunda linha - controle de gravação
-        recording_row2 = QHBoxLayout()
         
         self.record_btn = QPushButton("Iniciar Gravação")
         self.record_btn.clicked.connect(self.toggle_recording)
@@ -751,11 +729,11 @@ class StreamingWidget(QWidget):
         self.recording_label = QLabel("Não gravando")
         self.recording_label.setStyleSheet("color: gray;")
         
-        recording_row2.addWidget(self.record_btn)
-        recording_row2.addWidget(self.recording_label)
-        
-        recording_layout.addLayout(recording_row1)
-        recording_layout.addLayout(recording_row2)
+        recording_row1.addWidget(QLabel("Paciente:"))
+        recording_row1.addWidget(self.patient_combo)
+        recording_row1.addWidget(self.refresh_patients_btn)
+        recording_row1.addWidget(self.record_btn)
+        recording_row1.addWidget(self.recording_label)
         
         # Segunda linha - marcadores
         markers_group = QGroupBox("Marcadores")
@@ -858,25 +836,15 @@ class StreamingWidget(QWidget):
             self.current_patient_id = self.patient_combo.currentData()
             patient_name = self.patient_combo.currentText().split(" (ID:")[0]
             
-            # Obter tarefa do campo de texto
-            task = self.task_input.text().strip() or "default_task"
+            # Gerar nome do arquivo
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"patient_{self.current_patient_id}_{patient_name}_{timestamp}.csv"
+            full_path = get_recording_path(filename)
             
             try:
-                # Usar logger OpenBCI se disponível
-                if USE_OPENBCI_LOGGER:
-                    self.csv_logger = OpenBCICSVLogger(
-                        patient_id=f"P{self.current_patient_id:03d}",
-                        task=task,
-                        base_path=os.path.dirname(get_recording_path(""))
-                    )
-                    filename = self.csv_logger.filename
-                else:
-                    # Fallback para logger simples
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"patient_{self.current_patient_id}_{patient_name}_{timestamp}.csv"
-                    full_path = get_recording_path(filename)
-                    self.csv_logger = SimpleCSVLogger(str(full_path))
-                    self.csv_logger.start_logging()
+                # Usar nosso logger simples
+                self.csv_logger = SimpleCSVLogger(str(full_path))
+                self.csv_logger.start_logging()
                 
                 self.is_recording = True
                 self.record_btn.setText("Parar Gravação")
@@ -919,18 +887,7 @@ class StreamingWidget(QWidget):
     def add_marker(self, marker_type):
         """Adiciona um marcador durante a gravação"""
         if self.is_recording and self.csv_logger:
-            if USE_OPENBCI_LOGGER:
-                # Para o logger OpenBCI, verificar se baseline está ativo
-                if hasattr(self.csv_logger, 'is_baseline_active'):
-                    if self.csv_logger.is_baseline_active():
-                        QMessageBox.warning(self, "Baseline Ativo", 
-                                          "Não é possível adicionar marcadores durante o baseline")
-                        return
-                # Marcar para adicionar na próxima amostra
-                self.pending_marker = marker_type
-            else:
-                # Logger simples
-                marker = self.csv_logger.add_marker(marker_type)
+            marker = self.csv_logger.add_marker(marker_type)
             
             # Feedback visual
             if marker_type == "T1":
@@ -944,61 +901,23 @@ class StreamingWidget(QWidget):
     def start_baseline(self):
         """Inicia o período de baseline"""
         if self.is_recording and self.csv_logger:
-            if USE_OPENBCI_LOGGER:
-                # Logger OpenBCI
-                if hasattr(self.csv_logger, 'start_baseline'):
-                    self.csv_logger.start_baseline()
-                    
-                    # Iniciar timer visual
-                    self.baseline_timer.timeout.connect(self.update_baseline_timer)
-                    self.baseline_timer.start(1000)
-                else:
-                    # Fallback
-                    self.csv_logger.add_marker("BASELINE")
-            else:
-                # Logger simples
-                self.csv_logger.add_marker("BASELINE")
+            # Adicionar marcador de baseline
+            self.csv_logger.add_marker("BASELINE")
             
             # Desabilitar outros botões por 5 minutos
             self.t1_btn.setEnabled(False)
-            self.t2_btn.setEnabled(False) 
+            self.t2_btn.setEnabled(False)
             self.baseline_btn.setEnabled(False)
+            
+            # Iniciar timer de 5 minutos (300 segundos)
+            self.baseline_time_remaining = 300
+            self.baseline_timer.start(1000)  # Atualizar a cada segundo
             
             # Feedback visual
             self.recording_label.setText("Gravando - Baseline iniciado")
     
     def update_baseline_timer(self):
         """Atualiza o timer de baseline"""
-        if USE_OPENBCI_LOGGER and hasattr(self.csv_logger, 'get_baseline_remaining'):
-            remaining = self.csv_logger.get_baseline_remaining()
-            
-            if remaining <= 0:
-                # Baseline finalizado
-                self.baseline_timer.stop()
-                self.t1_btn.setEnabled(True)
-                self.t2_btn.setEnabled(True)
-                self.baseline_btn.setEnabled(True)
-                self.recording_label.setText("Gravando - Baseline finalizado")
-                QMessageBox.information(self, "Baseline", "Período de baseline finalizado!")
-            else:
-                # Atualizar display
-                minutes = int(remaining // 60)
-                seconds = int(remaining % 60)
-                self.recording_label.setText(f"Gravando - Baseline: {minutes:02d}:{seconds:02d}")
-        else:
-            # Fallback para timer simples
-            if hasattr(self, 'baseline_time_remaining'):
-                self.baseline_time_remaining -= 1
-                if self.baseline_time_remaining <= 0:
-                    self.baseline_timer.stop()
-                    self.t1_btn.setEnabled(True)
-                    self.t2_btn.setEnabled(True)
-                    self.baseline_btn.setEnabled(True)
-                    self.recording_label.setText("Gravando - Baseline finalizado")
-                else:
-                    minutes = self.baseline_time_remaining // 60
-                    seconds = self.baseline_time_remaining % 60
-                    self.recording_label.setText(f"Gravando - Baseline: {minutes:02d}:{seconds:02d}")
         if self.baseline_time_remaining > 0:
             minutes = self.baseline_time_remaining // 60
             seconds = self.baseline_time_remaining % 60
@@ -1033,21 +952,7 @@ class StreamingWidget(QWidget):
         
         # Enviar para logger se estiver gravando
         if self.is_recording and self.csv_logger:
-            if USE_OPENBCI_LOGGER and hasattr(self.csv_logger, 'log_sample'):
-                # Logger OpenBCI - verificar marcador pendente
-                marker = self.pending_marker
-                self.pending_marker = None  # Limpar marcador pendente
-                
-                # Garantir que temos 16 canais
-                if len(data) == 16:
-                    self.csv_logger.log_sample(data, marker)
-                else:
-                    # Ajustar dados se necessário
-                    eeg_data = data[:16] if len(data) >= 16 else data + [0.0] * (16 - len(data))
-                    self.csv_logger.log_sample(eeg_data, marker)
-            else:
-                # Logger simples (fallback)
-                self.csv_logger.log_data(data)
+            self.csv_logger.log_data(data)
     
     def on_connection_status(self, connected):
         """Callback para status da conexão"""
