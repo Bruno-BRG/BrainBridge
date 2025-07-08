@@ -687,6 +687,13 @@ class StreamingWidget(QWidget):
         self.current_patient_id = None
         self.pending_marker = None  # Para marcadores pendentes no logger OpenBCI
         self.baseline_timer = QTimer()  # Timer para baseline
+        
+        # Timer de sessão
+        self.session_timer = QTimer()
+        self.session_timer.timeout.connect(self.update_session_timer)
+        self.session_start_time = None
+        self.session_elapsed_seconds = 0
+        
         self.setup_ui()
         
     def setup_ui(self):
@@ -732,14 +739,16 @@ class StreamingWidget(QWidget):
         self.refresh_patients_btn = QPushButton("Atualizar")
         self.refresh_patients_btn.clicked.connect(self.refresh_patients)
         
-        self.task_input = QLineEdit()
-        self.task_input.setPlaceholderText("Ex: motor_imagery, rest, baseline")
+        # Dropdown para seleção de tarefa
+        self.task_combo = QComboBox()
+        self.task_combo.addItems(["Baseline", "Treino", "Teste", "Jogo"])
+        self.task_combo.setCurrentIndex(0)  # Baseline como padrão
         
         recording_row1.addWidget(QLabel("Paciente:"))
         recording_row1.addWidget(self.patient_combo)
         recording_row1.addWidget(self.refresh_patients_btn)
         recording_row1.addWidget(QLabel("Tarefa:"))
-        recording_row1.addWidget(self.task_input)
+        recording_row1.addWidget(self.task_combo)
         
         # Segunda linha - controle de gravação
         recording_row2 = QHBoxLayout()
@@ -751,8 +760,13 @@ class StreamingWidget(QWidget):
         self.recording_label = QLabel("Não gravando")
         self.recording_label.setStyleSheet("color: gray;")
         
+        # Label do timer de sessão
+        self.session_timer_label = QLabel("Tempo: 00:00:00")
+        self.session_timer_label.setStyleSheet("color: gray; font-weight: bold;")
+        
         recording_row2.addWidget(self.record_btn)
         recording_row2.addWidget(self.recording_label)
+        recording_row2.addWidget(self.session_timer_label)
         
         recording_layout.addLayout(recording_row1)
         recording_layout.addLayout(recording_row2)
@@ -802,6 +816,11 @@ class StreamingWidget(QWidget):
         # Widget de plot
         self.plot_widget = EEGPlotWidget()
         layout.addWidget(self.plot_widget)
+        
+        # Timer de sessão
+        self.session_label = QLabel("Sessão: 00:00")
+        self.session_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self.session_label)
         
         self.setLayout(layout)
         
@@ -858,8 +877,8 @@ class StreamingWidget(QWidget):
             self.current_patient_id = self.patient_combo.currentData()
             patient_name = self.patient_combo.currentText().split(" (ID:")[0]
             
-            # Obter tarefa do campo de texto
-            task = self.task_input.text().strip() or "default_task"
+            # Obter tarefa do dropdown
+            task = self.task_combo.currentText().lower().replace(" ", "_")  # ex: "Baseline" -> "baseline"
             
             try:
                 # Usar logger OpenBCI se disponível
@@ -867,9 +886,12 @@ class StreamingWidget(QWidget):
                     self.csv_logger = OpenBCICSVLogger(
                         patient_id=f"P{self.current_patient_id:03d}",
                         task=task,
+                        patient_name=patient_name,  # Adicionar nome do paciente
                         base_path=os.path.dirname(get_recording_path(""))
                     )
                     filename = self.csv_logger.filename
+                    # Mostrar caminho relativo para feedback visual
+                    display_path = f"{self.csv_logger.patient_folder}/{filename}"
                 else:
                     # Fallback para logger simples
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -877,10 +899,11 @@ class StreamingWidget(QWidget):
                     full_path = get_recording_path(filename)
                     self.csv_logger = SimpleCSVLogger(str(full_path))
                     self.csv_logger.start_logging()
+                    display_path = filename
                 
                 self.is_recording = True
                 self.record_btn.setText("Parar Gravação")
-                self.recording_label.setText(f"Gravando: {filename}")
+                self.recording_label.setText(f"Gravando: {display_path}")
                 self.recording_label.setStyleSheet("color: red; font-weight: bold;")
                 
                 # Habilitar botões de marcadores
@@ -889,7 +912,12 @@ class StreamingWidget(QWidget):
                 self.baseline_btn.setEnabled(True)
                 
                 # Registrar gravação no banco
-                self.db_manager.add_recording(self.current_patient_id, filename)
+                recording_path = display_path if USE_OPENBCI_LOGGER else filename
+                self.db_manager.add_recording(self.current_patient_id, recording_path)
+                
+                # Iniciar timer de sessão
+                self.session_start_time = time.time()
+                self.session_timer.start(1000)  # Atualizar a cada segundo
                 
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Erro ao iniciar gravação: {e}")
@@ -913,6 +941,11 @@ class StreamingWidget(QWidget):
             if self.baseline_timer.isActive():
                 self.baseline_timer.stop()
                 self.baseline_label.setText("")
+            
+            # Parar timer de sessão
+            self.session_timer.stop()
+            self.session_elapsed_seconds = 0
+            self.update_session_timer()
             
             QMessageBox.information(self, "Sucesso", "Gravação finalizada!")
     
@@ -1022,8 +1055,14 @@ class StreamingWidget(QWidget):
     def reset_recording_label(self):
         """Reseta o texto do label de gravação"""
         if self.is_recording:
-            filename = self.csv_logger.filename if self.csv_logger else "arquivo.csv"
-            self.recording_label.setText(f"Gravando: {filename}")
+            if self.csv_logger:
+                if USE_OPENBCI_LOGGER and hasattr(self.csv_logger, 'patient_folder'):
+                    display_path = f"{self.csv_logger.patient_folder}/{self.csv_logger.filename}"
+                else:
+                    display_path = self.csv_logger.filename
+            else:
+                display_path = "arquivo.csv"
+            self.recording_label.setText(f"Gravando: {display_path}")
             self.recording_label.setStyleSheet("color: red; font-weight: bold;")
     
     def on_data_received(self, data):
@@ -1069,6 +1108,28 @@ class StreamingWidget(QWidget):
             self.connect_btn.setText("Desconectar")
         else:
             self.connect_btn.setText("Conectar")
+    
+    def update_session_timer(self):
+        """Atualiza o display do timer de sessão"""
+        if self.session_start_time is not None:
+            # Calcular tempo decorrido
+            elapsed = int(time.time() - self.session_start_time)
+        else:
+            elapsed = 0
+        
+        # Formatar tempo como HH:MM:SS
+        hours = elapsed // 3600
+        minutes = (elapsed % 3600) // 60
+        seconds = elapsed % 60
+        
+        time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        
+        if self.is_recording:
+            self.session_timer_label.setText(f"Tempo: {time_str}")
+            self.session_timer_label.setStyleSheet("color: red; font-weight: bold;")
+        else:
+            self.session_timer_label.setText(f"Tempo: {time_str}")
+            self.session_timer_label.setStyleSheet("color: gray; font-weight: bold;")
 
 
 class BCIMainWindow(QMainWindow):

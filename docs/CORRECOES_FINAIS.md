@@ -24,10 +24,11 @@
 
 2. **Registrar Paciente:**
    - Preencher dados do paciente
-   - Escolher tarefa (ex: "motor_imagery") 
    - Clicar "Registrar Paciente"
 
 3. **Iniciar Gravação:**
+   - Selecionar paciente no dropdown
+   - Escolher tarefa: "Baseline", "Treino", "Teste" ou "Jogo"
    - Clicar "Iniciar Gravação"
    - Sistema criará CSV no formato OpenBCI exato
 
@@ -38,13 +39,32 @@
 
 5. **Parar Gravação:**
    - Clicar "Parar Gravação"
-   - Arquivo salvo em `data/recordings/`
+   - Arquivo salvo em `data/recordings/PACIENTE_NOME/`
 
 ### Arquivos de Saída:
-- **Formato**: `PACIENTE_TAREFA_TIMESTAMP.csv`
-- **Local**: `data/recordings/`
+- **Organização**: Cada paciente tem sua própria pasta
+- **Estrutura**: 
+  ```
+  data/recordings/
+  ├── P001_João_Silva/
+  │   ├── P001_motor_imagery_20250707_143022.csv
+  │   ├── P001_baseline_20250707_143500.csv
+  │   └── P001_rest_20250707_144000.csv
+  ├── P002_Maria_Santos/
+  │   ├── P002_motor_imagery_20250707_145000.csv
+  │   └── P002_baseline_20250707_145300.csv
+  └── P003_Pedro_Oliveira/
+      └── P003_motor_imagery_20250707_150000.csv
+  ```
 - **Formato**: 100% compatível com OpenBCI GUI
-- **Colunas**: 33 colunas exatas, incluindo "Annotations" para marcadores
+- **Nomenclatura**: 
+  - Pasta: `PACIENTE_ID_Nome_Sanitizado/`
+  - Arquivo: `PACIENTE_ID_TAREFA_TIMESTAMP.csv`
+- **Vantagens**: 
+  - ✅ Organização clara por paciente
+  - ✅ Múltiplas sessões do mesmo paciente agrupadas
+  - ✅ Fácil localização e backup por paciente
+  - ✅ Nomes de arquivos limpos e padronizados
 
 ### Exemplo de CSV Gerado:
 ```csv

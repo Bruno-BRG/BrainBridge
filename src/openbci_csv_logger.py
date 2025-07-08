@@ -9,14 +9,16 @@ from typing import List, Optional
 class OpenBCICSVLogger:
     """Logger que gera CSVs no formato exato do OpenBCI"""
     
-    def __init__(self, patient_id: str, task: str, base_path: str = None):
+    def __init__(self, patient_id: str, task: str, patient_name: str = None, base_path: str = None):
         self.patient_id = patient_id
         self.task = task
+        self.patient_name = patient_name or "Unknown"
         self.base_path = base_path or "data/recordings"
         self.sample_index = 0
         self.csv_file = None
         self.csv_writer = None
         self.filename = None
+        self.patient_folder = None
         
         # Estado dos marcadores
         self.last_marker = None
@@ -29,11 +31,20 @@ class OpenBCICSVLogger:
     def _create_csv_file(self):
         """Cria o arquivo CSV com headers no formato OpenBCI"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.filename = f"{self.patient_id}_{self.task}_{timestamp}.csv"
-        filepath = os.path.join(self.base_path, self.filename)
         
-        # Garantir que o diretório existe
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        # Criar nome da pasta do paciente (sanitizar nome para filesystem)
+        safe_patient_name = self._sanitize_filename(self.patient_name)
+        self.patient_folder = f"{self.patient_id}_{safe_patient_name}"
+        
+        # Caminho completo para a pasta do paciente
+        patient_dir = os.path.join(self.base_path, self.patient_folder)
+        
+        # Garantir que o diretório do paciente existe
+        os.makedirs(patient_dir, exist_ok=True)
+        
+        # Nome do arquivo
+        self.filename = f"{self.patient_id}_{self.task}_{timestamp}.csv"
+        filepath = os.path.join(patient_dir, self.filename)
         
         self.csv_file = open(filepath, 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
@@ -58,6 +69,15 @@ class OpenBCICSVLogger:
         ]
         self.csv_writer.writerow(header)
         self.csv_file.flush()
+    
+    def _sanitize_filename(self, name):
+        """Sanitiza o nome para ser usado como nome de pasta/arquivo"""
+        import re
+        # Remover caracteres especiais e espaços
+        safe_name = re.sub(r'[<>:"/\\|?*]', '', name)
+        safe_name = safe_name.replace(' ', '_')
+        # Limitar o tamanho
+        return safe_name[:50] if len(safe_name) > 50 else safe_name
     
     def log_sample(self, eeg_data: List[float], marker: Optional[str] = None):
         """
@@ -144,6 +164,12 @@ class OpenBCICSVLogger:
             return 0
         elapsed = (datetime.now() - self.baseline_start_time).total_seconds()
         return max(0, 300 - elapsed)
+    
+    def get_full_path(self):
+        """Retorna o caminho completo do arquivo"""
+        if self.patient_folder and self.filename:
+            return os.path.join(self.base_path, self.patient_folder, self.filename)
+        return os.path.join(self.base_path, self.filename) if self.filename else None
     
     def stop_logging(self):
         """Para o logging (método esperado pela interface)"""
