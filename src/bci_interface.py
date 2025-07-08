@@ -743,6 +743,7 @@ class StreamingWidget(QWidget):
         self.task_combo = QComboBox()
         self.task_combo.addItems(["Baseline", "Treino", "Teste", "Jogo"])
         self.task_combo.setCurrentIndex(0)  # Baseline como padrão
+        self.task_combo.currentTextChanged.connect(self.on_task_changed)
         
         recording_row1.addWidget(QLabel("Paciente:"))
         recording_row1.addWidget(self.patient_combo)
@@ -902,7 +903,7 @@ class StreamingWidget(QWidget):
                     display_path = filename
                 
                 self.is_recording = True
-                self.record_btn.setText("Parar Gravação")
+                self.update_record_button_text()  # Usar método que considera a tarefa
                 self.recording_label.setText(f"Gravando: {display_path}")
                 self.recording_label.setStyleSheet("color: red; font-weight: bold;")
                 
@@ -928,7 +929,7 @@ class StreamingWidget(QWidget):
                 self.csv_logger = None
             
             self.is_recording = False
-            self.record_btn.setText("Iniciar Gravação")
+            self.update_record_button_text()  # Usar método que considera a tarefa
             self.recording_label.setText("Não gravando")
             self.recording_label.setStyleSheet("color: gray;")
             
@@ -966,10 +967,11 @@ class StreamingWidget(QWidget):
                 marker = self.csv_logger.add_marker(marker_type)
             
             # Feedback visual
+            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
             if marker_type == "T1":
-                self.recording_label.setText(f"Gravando - Marcador T1 adicionado (T0 em 400 amostras)")
+                self.recording_label.setText(f"{'Jogando' if task_name == 'jogo' else 'Gravando'} - Marcador T1 adicionado (T0 em 400 amostras)")
             elif marker_type == "T2":
-                self.recording_label.setText(f"Gravando - Marcador T2 adicionado (T0 em 400 amostras)")
+                self.recording_label.setText(f"{'Jogando' if task_name == 'jogo' else 'Gravando'} - Marcador T2 adicionado (T0 em 400 amostras)")
             
             # Resetar texto após 3 segundos
             QTimer.singleShot(3000, self.reset_recording_label)
@@ -998,7 +1000,9 @@ class StreamingWidget(QWidget):
             self.baseline_btn.setEnabled(False)
             
             # Feedback visual
-            self.recording_label.setText("Gravando - Baseline iniciado")
+            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
+            status_text = "Jogando" if task_name == "jogo" else "Gravando"
+            self.recording_label.setText(f"{status_text} - Baseline iniciado")
     
     def update_baseline_timer(self):
         """Atualiza o timer de baseline"""
@@ -1011,13 +1015,18 @@ class StreamingWidget(QWidget):
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
                 self.baseline_btn.setEnabled(True)
-                self.recording_label.setText("Gravando - Baseline finalizado")
+                
+                task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
+                status_text = "Jogando" if task_name == "jogo" else "Gravando"
+                self.recording_label.setText(f"{status_text} - Baseline finalizado")
                 QMessageBox.information(self, "Baseline", "Período de baseline finalizado!")
             else:
                 # Atualizar display
                 minutes = int(remaining // 60)
                 seconds = int(remaining % 60)
-                self.recording_label.setText(f"Gravando - Baseline: {minutes:02d}:{seconds:02d}")
+                task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
+                status_text = "Jogando" if task_name == "jogo" else "Gravando"
+                self.recording_label.setText(f"{status_text} - Baseline: {minutes:02d}:{seconds:02d}")
         else:
             # Fallback para timer simples
             if hasattr(self, 'baseline_time_remaining'):
@@ -1055,6 +1064,9 @@ class StreamingWidget(QWidget):
     def reset_recording_label(self):
         """Reseta o texto do label de gravação"""
         if self.is_recording:
+            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
+            status_text = "Jogando" if task_name == "jogo" else "Gravando"
+            
             if self.csv_logger:
                 if USE_OPENBCI_LOGGER and hasattr(self.csv_logger, 'patient_folder'):
                     display_path = f"{self.csv_logger.patient_folder}/{self.csv_logger.filename}"
@@ -1062,7 +1074,7 @@ class StreamingWidget(QWidget):
                     display_path = self.csv_logger.filename
             else:
                 display_path = "arquivo.csv"
-            self.recording_label.setText(f"Gravando: {display_path}")
+            self.recording_label.setText(f"{status_text}: {display_path}")
             self.recording_label.setStyleSheet("color: red; font-weight: bold;")
     
     def on_data_received(self, data):
@@ -1130,6 +1142,32 @@ class StreamingWidget(QWidget):
         else:
             self.session_timer_label.setText(f"Tempo: {time_str}")
             self.session_timer_label.setStyleSheet("color: gray; font-weight: bold;")
+    
+    def on_task_changed(self):
+        """Callback chamado quando a tarefa é alterada"""
+        task = self.task_combo.currentText()
+        
+        if not self.is_recording:
+            # Só atualizar o texto se não estiver gravando
+            if task == "Jogo":
+                self.record_btn.setText("Iniciar Jogo")
+            else:
+                self.record_btn.setText("Iniciar Gravação")
+    
+    def update_record_button_text(self):
+        """Atualiza o texto do botão de gravação baseado no estado e tarefa"""
+        task = self.task_combo.currentText()
+        
+        if self.is_recording:
+            if task == "Jogo":
+                self.record_btn.setText("Parar Jogo")
+            else:
+                self.record_btn.setText("Parar Gravação")
+        else:
+            if task == "Jogo":
+                self.record_btn.setText("Iniciar Jogo")
+            else:
+                self.record_btn.setText("Iniciar Gravação")
 
 
 class BCIMainWindow(QMainWindow):

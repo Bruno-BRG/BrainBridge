@@ -60,12 +60,20 @@ O sistema BCI foi completamente implementado com todas as funcionalidades solici
   - **Jogo**
 - Valor usado no nome do arquivo (em lowercase)
 
-#### 10. **⏱️ Timer de Sessão (NOVO)**
+#### 10. **⏱️ Timer de Sessão**
 - **Inicia automaticamente** ao começar gravação
 - **Para automaticamente** ao terminar gravação
 - Display em formato **HH:MM:SS**
 - Atualização em tempo real (a cada segundo)
 - Posicionado ao lado do status de gravação
+
+#### 11. **🎮 Modo Jogo (NOVO)**
+- **Botão inteligente**: Muda para "Iniciar Jogo" quando tarefa "Jogo" está selecionada
+- **Estados dinâmicos**:
+  - Jogo não ativo: **"Iniciar Jogo"**
+  - Jogo ativo: **"Parar Jogo"**
+  - Outras tarefas: **"Iniciar Gravação"** / **"Parar Gravação"**
+- **Interface contextual**: Labels e mensagens se adaptam ao modo jogo
 
 ### 🔧 Arquivos Principais
 
@@ -111,7 +119,8 @@ tests/
    - Aba "Streaming e Gravação"
    - Conectar ao UDP (ou usar simulação)
    - Selecionar paciente e tarefa
-   - Clicar "Iniciar Gravação"
+   - **Para modo Jogo**: Botão muda para "Iniciar Jogo"
+   - **Para outras tarefas**: Botão permanece "Iniciar Gravação"
    - **Timer de sessão inicia automaticamente**
 
 4. **Usar marcadores**:
@@ -121,7 +130,8 @@ tests/
    - **T0**: Inserido automaticamente após T1/T2
 
 5. **Parar gravação**:
-   - Clicar "Parar Gravação"
+   - **Para modo Jogo**: Clicar "Parar Jogo"
+   - **Para outras tarefas**: Clicar "Parar Gravação"
    - **Timer de sessão para automaticamente**
    - Arquivo salvo na pasta do paciente
 
@@ -144,6 +154,7 @@ Todos os testes passam:
 - ✅ Organização por pastas de paciente
 - ✅ Dropdown de tarefas funcional
 - ✅ Timer de sessão implementado
+- ✅ Modo jogo com botão inteligente
 - ✅ Interface completa funcionando
 - ✅ Sistema de marcadores correto
 
@@ -155,4 +166,4 @@ O sistema BCI está **completamente implementado** e **testado**, incluindo:
 - ✅ Compatibilidade total com OpenBCI
 - ✅ Interface intuitiva e robusta
 
-**Última atualização**: Timer de sessão implementado com sucesso! ⏱️
+**Última atualização**: Modo Jogo implementado com botão inteligente! 🎮⏱️
