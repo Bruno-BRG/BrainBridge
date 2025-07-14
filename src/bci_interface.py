@@ -4,6 +4,7 @@ Funcionalidades:
 - Cadastro de pacientes
 - Streaming de dados em tempo real com visualização
 - Gravação de dados atrelada ao paciente com marcadores T1, T2 e Baseline
+- Predição em tempo real durante o modo jogo
 """
 
 import sys
@@ -15,9 +16,6 @@ import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from collections import deque
-
-import numpy as np
-import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QTabWidget, QLabel, QLineEdit, 
                            QPushButton, QComboBox, QSpinBox, QTextEdit,
@@ -26,11 +24,12 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QSplitter, QFrame, QDateEdit, QDoubleSpinBox)
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt, QDate
 from PyQt5.QtGui import QFont, QPixmap, QIcon
-
-import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.animation as animation
+from matplotlib import pyplot as plt
+import torch
+import torch.nn as nn
+import numpy as np
 
 # Importar configuração de caminhos
 from config import get_recording_path, get_database_path, ensure_folders_exist
@@ -404,6 +403,15 @@ class StreamingThread(QThread):
         self.data_queue = deque(maxlen=100)
         self.is_mock_mode = False
         
+        # Inicialização do modelo
+        self.model = None
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.window_size = 400  # 3.2s @ 125Hz
+        self.samples_since_last_prediction = 0
+        self.predictions = deque(maxlen=50)  # Últimas predições
+        self.eeg_buffer = deque(maxlen=1000)  # Buffer para dados EEG
+        self.game_mode = False  # Flag para modo jogo
+        
     def start_streaming(self, host='localhost', port=12345):
         """Inicia o streaming"""
         self.host = host
@@ -696,6 +704,15 @@ class StreamingWidget(QWidget):
         
         self.setup_ui()
         
+        # Inicialização do modelo
+        self.model = None
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.window_size = 400  # 3.2s @ 125Hz
+        self.samples_since_last_prediction = 0
+        self.predictions = deque(maxlen=50)  # Últimas predições
+        self.eeg_buffer = deque(maxlen=1000)  # Buffer para dados EEG
+        self.game_mode = False  # Flag para modo jogo
+        
     def setup_ui(self):
         """Configura a interface"""
         layout = QVBoxLayout()
@@ -823,6 +840,55 @@ class StreamingWidget(QWidget):
         self.session_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(self.session_label)
         
+        # Game feedback group
+        game_group = QGroupBox("Predições do Jogo")
+        game_group.setVisible(False)  # Inicialmente oculto
+        self.game_group = game_group
+        game_layout = QVBoxLayout()
+
+        # Label para mostrar predição atual
+        self.prediction_label = QLabel("Aguardando predição...")
+        self.prediction_label.setStyleSheet("font-size: 24px; font-weight: bold; padding: 10px;")
+        self.prediction_label.setAlignment(Qt.AlignCenter)
+        game_layout.addWidget(self.prediction_label)
+
+        # Labels para probabilidades
+        self.prob_left_label = QLabel("Mão Esquerda: 0%")
+        self.prob_right_label = QLabel("Mão Direita: 0%")
+        self.prob_left_label.setStyleSheet("color: #2196F3;")
+        self.prob_right_label.setStyleSheet("color: #FF9800;")
+        game_layout.addWidget(self.prob_left_label)
+        game_layout.addWidget(self.prob_right_label)
+
+        game_group.setLayout(game_layout)
+        layout.addWidget(game_group)
+        
+        # Stats group
+        stats_group = QGroupBox("Estatísticas do Jogo")
+        stats_group.setVisible(False)  # Inicialmente oculto
+        self.stats_group = stats_group
+        stats_layout = QGridLayout()
+
+        self.total_predictions_label = QLabel("Total de predições: 0")
+        self.left_predictions_label = QLabel("Mão esquerda: 0")
+        self.right_predictions_label = QLabel("Mão direita: 0")
+        self.transitions_label = QLabel("Transições: 0")
+        self.confidence_label = QLabel("Confiança média: 0%")
+
+        stats_layout.addWidget(self.total_predictions_label, 0, 0)
+        stats_layout.addWidget(self.left_predictions_label, 1, 0)
+        stats_layout.addWidget(self.right_predictions_label, 1, 1)
+        stats_layout.addWidget(self.transitions_label, 2, 0)
+        stats_layout.addWidget(self.confidence_label, 2, 1)
+
+        stats_group.setLayout(stats_layout)
+        layout.addWidget(stats_group)
+
+        # Timer para atualizar estatísticas
+        self.stats_timer = QTimer()
+        self.stats_timer.timeout.connect(self.update_game_stats)
+        self.stats_timer.start(1000)  # Atualizar a cada segundo
+        
         self.setLayout(layout)
         
         # Inicializar lista de pacientes
@@ -881,6 +947,20 @@ class StreamingWidget(QWidget):
             # Obter tarefa do dropdown
             task = self.task_combo.currentText().lower().replace(" ", "_")  # ex: "Baseline" -> "baseline"
             
+            # Verificar se é modo jogo
+            self.game_mode = (task == "jogo")
+            if self.game_mode:
+                if self.model is None:
+                    if not self.load_model():
+                        return
+                # Limpar variáveis do jogo
+                self.predictions.clear()
+                self.eeg_buffer.clear()
+                self.samples_since_last_prediction = 0
+                self.prediction_label.setText("Aguardando predição...")
+                self.prob_left_label.setText("Mão Esquerda: 0%")
+                self.prob_right_label.setText("Mão Direita: 0%")
+            
             try:
                 # Usar logger OpenBCI se disponível
                 if USE_OPENBCI_LOGGER:
@@ -929,6 +1009,7 @@ class StreamingWidget(QWidget):
                 self.csv_logger = None
             
             self.is_recording = False
+            self.game_mode = False  # Desativar modo jogo
             self.update_record_button_text()  # Usar método que considera a tarefa
             self.recording_label.setText("Não gravando")
             self.recording_label.setStyleSheet("color: gray;")
@@ -1077,11 +1158,138 @@ class StreamingWidget(QWidget):
             self.recording_label.setText(f"{status_text}: {display_path}")
             self.recording_label.setStyleSheet("color: red; font-weight: bold;")
     
+    def load_model(self):
+        """Carrega modelo CNN para inferência"""
+        try:
+            model_path = "models/best_model.pth"
+            possible_paths = [
+                model_path,
+                f"../models/{os.path.basename(model_path)}",
+                os.path.join(os.getcwd(), "models", os.path.basename(model_path))
+            ]
+            
+            model_found = False
+            for path in possible_paths:
+                if os.path.exists(path):
+                    model_path = path
+                    model_found = True
+                    break
+            
+            if not model_found:
+                QMessageBox.warning(self, "Erro", "Modelo não encontrado!")
+                return False
+            
+            self.model = EEGNet(n_channels=16, n_classes=2, n_samples=self.window_size)
+            state_dict = torch.load(model_path, map_location=self.device)
+            
+            # Carregar pesos
+            if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+                self.model.load_state_dict(state_dict['model_state_dict'])
+            else:
+                self.model.load_state_dict(state_dict)
+                
+            self.model.to(self.device).eval()
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao carregar modelo: {e}")
+            return False
+            
+    def update_game_stats(self):
+        """Atualiza estatísticas do jogo"""
+        if not self.game_mode or not self.predictions:
+            return
+            
+        # Calcular estatísticas
+        total_preds = len(self.predictions)
+        left_count = sum(1 for _, pred, _ in self.predictions if pred == 0)
+        right_count = sum(1 for _, pred, _ in self.predictions if pred == 1)
+        
+        # Contar transições
+        transitions = 0
+        for i in range(1, len(self.predictions)):
+            if self.predictions[i][1] != self.predictions[i-1][1]:
+                transitions += 1
+                
+        # Calcular confiança média
+        avg_conf = np.mean([conf for _, _, conf in self.predictions]) * 100
+        
+        # Atualizar labels
+        self.total_predictions_label.setText(f"Total de predições: {total_preds}")
+        self.left_predictions_label.setText(f"Mão esquerda: {left_count}")
+        self.right_predictions_label.setText(f"Mão direita: {right_count}")
+        self.transitions_label.setText(f"Transições: {transitions}")
+        self.confidence_label.setText(f"Confiança média: {avg_conf:.1f}%")
+        
+    def predict_movement(self, eeg_data):
+        """Faz predição do movimento com o modelo CNN"""
+        if not self.game_mode or self.model is None:
+            return
+            
+        try:
+            # Normalização por canal
+            for ch in range(16):
+                channel_data = eeg_data[:, ch]
+                q75, q25 = np.percentile(channel_data, [75, 25])
+                iqr = q75 - q25
+                if iqr == 0:
+                    iqr = 1.0
+                channel_mean = np.mean(channel_data)
+                eeg_data[:, ch] = (channel_data - channel_mean) / iqr
+            
+            # Transpor para (16, 400) e criar tensor
+            eeg_array = eeg_data.T
+            eeg_tensor = torch.FloatTensor(eeg_array).unsqueeze(0).unsqueeze(0)
+            eeg_tensor = eeg_tensor.to(self.device)
+            
+            # Predição
+            with torch.no_grad():
+                output = self.model(eeg_tensor)
+                probs = torch.softmax(output, dim=1)
+                pred = torch.argmax(probs, dim=1).item()
+                conf = probs[0][pred].item()
+                
+                # Probabilidades para cada classe
+                left_prob = probs[0][0].item()
+                right_prob = probs[0][1].item()
+            
+            # Atualizar interface
+            classes = ['🤚 Mão Esquerda', '✋ Mão Direita']
+            timestamp = datetime.now()
+            
+            self.prediction_label.setText(classes[pred])
+            self.prob_left_label.setText(f"Mão Esquerda: {left_prob:.1%}")
+            self.prob_right_label.setText(f"Mão Direita: {right_prob:.1%}")
+            
+            # Atualizar estilo baseado na predição
+            if pred == 0:  # Mão esquerda
+                self.prediction_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #2196F3; padding: 10px;")
+            else:  # Mão direita
+                self.prediction_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #FF9800; padding: 10px;")
+            
+            # Salvar predição
+            self.predictions.append((timestamp, pred, conf))
+            
+        except Exception as e:
+            print(f"Erro na predição: {e}")
+    
     def on_data_received(self, data):
         """Callback para dados recebidos"""
         # Enviar para plot
         self.plot_widget.add_data(data)
         
+        # Adicionar ao buffer de dados e verificar predição
+        if self.game_mode:
+            # Garantir que temos 16 canais
+            eeg_data = data[:16] if len(data) >= 16 else data + [0.0] * (16 - len(data))
+            self.eeg_buffer.append(eeg_data)
+            self.samples_since_last_prediction += 1
+            
+            # Fazer predição a cada 400 amostras
+            if len(self.eeg_buffer) >= self.window_size and self.samples_since_last_prediction >= self.window_size:
+                window_data = list(self.eeg_buffer)[-self.window_size:]
+                self.predict_movement(np.array(window_data))
+                self.samples_since_last_prediction = 0
+                
         # Enviar para logger se estiver gravando
         if self.is_recording and self.csv_logger:
             if USE_OPENBCI_LOGGER and hasattr(self.csv_logger, 'log_sample'):
@@ -1151,8 +1359,17 @@ class StreamingWidget(QWidget):
             # Só atualizar o texto se não estiver gravando
             if task == "Jogo":
                 self.record_btn.setText("Iniciar Jogo")
+                # Carregar modelo se ainda não foi carregado
+                if self.model is None:
+                    if not self.load_model():
+                        self.task_combo.setCurrentText("Baseline")
+                        return
+                self.game_group.setVisible(True)
+                self.stats_group.setVisible(True)
             else:
                 self.record_btn.setText("Iniciar Gravação")
+                self.game_group.setVisible(False)
+                self.stats_group.setVisible(False)
     
     def update_record_button_text(self):
         """Atualiza o texto do botão de gravação baseado no estado e tarefa"""
@@ -1168,6 +1385,57 @@ class StreamingWidget(QWidget):
                 self.record_btn.setText("Iniciar Jogo")
             else:
                 self.record_btn.setText("Iniciar Gravação")
+
+
+class EEGNet(nn.Module):
+    """Modelo EEGNet que coincide exatamente com o arquivo salvo"""
+    def __init__(self, n_channels=16, n_classes=2, n_samples=400, dropout_rate=0.5):
+        super().__init__()
+        
+        # Architecture parameters
+        self.F1 = 8  # Number of temporal filters
+        self.F2 = 16  # Number of pointwise filters
+        self.D = 2   # Depth multiplier
+        
+        # Block 1: Temporal Convolution
+        self.block1 = nn.Sequential(
+            nn.Conv2d(1, self.F1, (1, 64), padding=(0, 32), bias=False),
+            nn.BatchNorm2d(self.F1)
+        )
+        
+        # Block 2: Spatial Filter
+        self.block2 = nn.Sequential(
+            nn.Conv2d(self.F1, self.F1 * self.D, (n_channels, 1), groups=self.F1, bias=False),
+            nn.BatchNorm2d(self.F1 * self.D),
+            nn.ELU(),
+            nn.AvgPool2d((1, 4)),
+            nn.Dropout(dropout_rate)
+        )
+        
+        # Block 3: Separable Convolution
+        self.block3 = nn.Sequential(
+            nn.Conv2d(self.F1 * self.D, self.F1 * self.D, (1, 16), padding=(0, 8), groups=self.F1 * self.D, bias=False),
+            nn.Conv2d(self.F1 * self.D, self.F2, 1, bias=False),
+            nn.BatchNorm2d(self.F2),
+            nn.ELU(),
+            nn.AvgPool2d((1, 8)),
+            nn.Dropout(dropout_rate)
+        )
+        
+        # Classifier
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.F2 * (n_samples // 32), n_classes)
+        )
+        
+    def forward(self, x):
+        if len(x.shape) == 3:
+            x = x.unsqueeze(1)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.classifier(x)
+        return x
 
 
 class BCIMainWindow(QMainWindow):
