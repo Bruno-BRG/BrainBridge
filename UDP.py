@@ -1,11 +1,6 @@
 import time
-import numpy as np
-from collections import deque
 import socket
 import zmq
-from keras.models import load_model
-from pylsl import StreamInlet, resolve_stream
-import keyboard
 
 def get_local_ip():
     try:
@@ -30,35 +25,22 @@ def send_ip_UPD(ip):
     finally:
         sock.close()
 
-def predict_model(model, input_data):
-    # Ajuste de dimensão conforme o modelo: nota o uso de transposição
-    res = model(np.array([input_data.T]), training=False)
-    return res.numpy()[0, 0]
-
-def enviar_sinal(zmq_socket, resultado):
-    if resultado == 1:
-        zmq_socket.send_string("LEFT_HAND_OPEN")
+def enviar_sinal(zmq_socket, lado):
+    if lado.lower() == 'direita':
         zmq_socket.send_string("RIGHT_HAND_CLOSE")
-        print("Right hand closed")
-    else:
+        time.sleep(1)
         zmq_socket.send_string("RIGHT_HAND_OPEN")
+        print("Mão direita fechada")
+    elif lado.lower() == 'esquerda':
         zmq_socket.send_string("LEFT_HAND_CLOSE")
-        print("Left hand closed")
+        time.sleep(1)
+        zmq_socket.send_string("LEFT_HAND_OPEN")
+        print("Mão esquerda fechada")
+    else:
+        print("Entrada inválida. Use 'direita' ou 'esquerda'")
 
 def main():
-    # Carrega o modelo
-    model = load_model(r'C:\Users\vivas\OneDrive\DocOneDrive\UFBA\CIMATEC\Projeto CC Tecnologias Assistivas\BCI EEG\CNN_Rafa\best_model_16.h5')
-    epochsize = model.input_shape[2]
-
-    # Inicializa a janela deslizante
-    data_window = deque(maxlen=epochsize)
-
-    print("Buscando stream EEG...")
-    streams = resolve_stream('type', 'EEG')
-    inlet = StreamInlet(streams[0])
-    time.sleep(1)
-
-    # Configura o socket ZMQ (evite conflitar com o módulo socket)
+    # Configura o socket ZMQ
     context = zmq.Context()
     zmq_socket = context.socket(zmq.PUB)
     zmq_socket.bind("tcp://*:5555")
@@ -68,32 +50,16 @@ def main():
     print(f"IP Local detectado: {local_ip}")
     send_ip_UPD(local_ip)
 
-    t0 = time.time()
-    dt = 0.3
-    tempo_a = None  # Para cálculo da frequência
+    print("\nInterface de Controle Manual")
+    print("Digite 'sair' para encerrar o programa")
+    
+    while True:
+        lado = input("\nQual mão deseja controlar? (direita/esquerda): ")
+        if lado.lower() == 'sair':
+            break
+        enviar_sinal(zmq_socket, lado)
 
-    print("Iniciando aquisição de dados... (pressione 'f' para finalizar)")
-    try:
-        while not keyboard.is_pressed('f'):
-            chunk, timestamps = inlet.pull_chunk()
-            if chunk:
-                for ind, sample in enumerate(chunk):
-                    data_window.append(sample)
-
-                    if keyboard.is_pressed('g'):
-                        if tempo_a is not None and (timestamps[ind] - tempo_a) > 0:
-                            freq = 1 / (timestamps[ind] - tempo_a)
-                            print(f'Frequência: {freq:.2f} hz')
-                    tempo_a = timestamps[ind]
-
-                    if len(data_window) == epochsize and (time.time() - t0) > dt:
-                        t0 = time.time()
-                        resultado = predict_model(model, np.array(data_window))
-                        enviar_sinal(zmq_socket, resultado)
-    except KeyboardInterrupt:
-        print("Encerramento solicitado pelo usuário.")
-    finally:
-        print("Encerrando aquisição de dados.")
+    print("Encerrando programa.")
 
 if __name__ == '__main__':
     main()
