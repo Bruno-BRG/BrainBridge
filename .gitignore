@@ -1,27 +1,50 @@
-# Python cache files and directories
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
-# PyCharm
-.idea/
-
-# VS Code
-.vscode/
-
-# Python virtual environment
-venv/
-env/
 
 # Distribution / packaging
 dist/
 build/
 *.egg-info/
+*.egg
 
-# Lightning logs
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Project specific
 lightning_logs/
 training_runs/
-
-# Data files
 captured_data/
 window_plots/
+*.log
+
+# Model files
+*.pth
+*.pt
+*.h5
+
+# Database
+*.db
+*.sqlite3
+
+# Local development settings
+.env
+.env.local

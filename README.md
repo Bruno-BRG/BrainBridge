@@ -1,6 +1,41 @@
 # Sistema BCI - Interface PyQt5 com Marcadores
 
-## 🎯 Funcionalidades Implementadas
+## 🚀 Como Executar (ATUALIZADO)
+
+### ✨ Opção 1: Script Principal (Recomendado)
+```bash
+cd projetoBCI
+python run_bci.py
+```
+
+### ✨ Opção 2: Como Módulo Python
+```bash
+cd projetoBCI
+python -m bci
+```
+
+### ✨ Opção 3: Usando o módulo bci diretamente
+```python
+import bci
+bci.run()
+```
+
+## 📁 Estrutura Reorganizada
+
+```
+projetoBCI/
+├── 🎯 run_bci.py                    # ← SCRIPT PRINCIPAL
+├── bci/                             # Pacote principal organizado
+│   ├── __init__.py                  # Exports do pacote
+│   ├── main.py                      # Ponto de entrada limpo
+│   ├── BCI_main_window.py           # Janela principal
+│   ├── streaming_widget.py          # Interface de streaming
+│   ├── patient_registration_widget.py # Cadastro de pacientes
+│   └── ... (outros módulos)
+├── src/                             # Diretório legacy (depreciado)
+├── data/, models/, docs/            # Dados e documentação
+└── README.md                        # Este arquivo
+```
 
 ### ✅ Interface Completa
 - **Cadastro de Pacientes**: Nome, idade, sexo, mão afetada, tempo desde evento

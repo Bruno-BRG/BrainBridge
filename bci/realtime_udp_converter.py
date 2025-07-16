@@ -13,7 +13,7 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import logging
-from udp_receiver import UDPReceiver
+from bci.udp_receiver import UDPReceiver
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
