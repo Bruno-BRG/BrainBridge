@@ -32,11 +32,11 @@ import torch.nn as nn
 import numpy as np
 
 # Importar configuração de caminhos
-from config import get_recording_path, get_database_path, ensure_folders_exist
+from bci.configs.config import get_recording_path, get_database_path, ensure_folders_exist
 
 # Importar o logger OpenBCI
 try:
-    from openbci_csv_logger import OpenBCICSVLogger
+    from bci.network.openbci_csv_logger import OpenBCICSVLogger
     USE_OPENBCI_LOGGER = True
 except ImportError:
     USE_OPENBCI_LOGGER = False
@@ -48,15 +48,15 @@ import csv
 
 # Importar logger simples
 try:
-    from simple_csv_logger import SimpleCSVLogger
+    from bci.network.simple_csv_logger import SimpleCSVLogger
 except ImportError:
     SimpleCSVLogger = None
 
 # Não precisa adicionar ao path pois os módulos estão na mesma pasta agora
 try:
-    from udp_receiver import UDPReceiver
-    from realtime_udp_converter import RealTimeUDPConverter
-    from csv_data_logger import CSVDataLogger
+    from bci.network.udp_receiver import UDPReceiver
+    from bci.network.realtime_udp_converter import RealTimeUDPConverter
+    from bci.network.csv_data_logger import CSVDataLogger
     print("Módulos do sistema carregados com sucesso")
 except ImportError as e:
     print(f"Erro ao importar módulos: {e}")
@@ -101,7 +101,7 @@ except ImportError as e:
 
 # Importar a janela principal
 try:
-    from BCI_main_window import BCIMainWindow
+    from bci.ui.BCI_main_window import BCIMainWindow
 except ImportError as e:
     print(f"Erro ao importar BCIMainWindow: {e}")
     BCIMainWindow = None

@@ -2,7 +2,7 @@ import sqlite3
 import os
 from typing import List, Dict, Optional, Any
 from datetime import datetime
-from config import get_database_path
+from bci.configs.config import get_database_path
 
 class DatabaseManager:
     """Gerenciador do banco de dados SQLite para pacientes"""

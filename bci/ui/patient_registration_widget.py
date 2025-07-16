@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGridLayout, QLabel,
                            QComboBox, QSpinBox)
 from PyQt5.QtCore import QDate
 from typing import Optional
-from database_manager import DatabaseManager
+from bci.database.database_manager import DatabaseManager
 
 class PatientRegistrationWidget(QWidget):
     """Widget para cadastro de pacientes"""

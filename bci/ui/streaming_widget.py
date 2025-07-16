@@ -11,21 +11,22 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                            QProgressBar, QTextEdit, QMessageBox, QCheckBox,
                            QLineEdit, QSpinBox)
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
-from database_manager import DatabaseManager
-from streaming_thread import StreamingThread
-from config import get_recording_path
-from EEG_plot_widget import EEGPlotWidget
-from EEGNet import EEGNet
+from bci.database.database_manager import DatabaseManager
+from bci.streaming_logic.streaming_thread import StreamingThread
+from bci.configs.config import get_recording_path
+from bci.ui.EEG_plot_widget import EEGPlotWidget
+from bci.AI.EEGNet import EEGNet
+from bci.network.UDP import UDP
 
 # Importar loggers
 try:
-    from openbci_csv_logger import OpenBCICSVLogger
+    from bci.network.openbci_csv_logger import OpenBCICSVLogger
     USE_OPENBCI_LOGGER = True
 except ImportError:
     USE_OPENBCI_LOGGER = False
 
 try:
-    from simple_csv_logger import SimpleCSVLogger
+    from bci.network.simple_csv_logger import SimpleCSVLogger
 except ImportError:
     SimpleCSVLogger = None
 
@@ -603,8 +604,12 @@ class StreamingWidget(QWidget):
             timestamp = datetime.now()
             
             self.prediction_label.setText(classes[pred])
-            self.prob_left_label.setText(f"Mão Esquerda: {left_prob:.1%}")
-            self.prob_right_label.setText(f"Mão Direita: {right_prob:.1%}")
+            if classes[pred] == '🤚 Mão Esquerda':
+                self.prob_left_label.setText(f"Mão Esquerda: {left_prob:.1%}")
+                UDP.enviar_sinal('esquerda')  # Enviar sinal UDP
+            else:
+                self.prob_right_label.setText(f"Mão Direita: {right_prob:.1%}")
+                UDP.enviar_sinal('direita') 
             
             # Atualizar estilo baseado na predição
             if pred == 0:  # Mão esquerda
