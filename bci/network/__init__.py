@@ -6,6 +6,7 @@ Este módulo contém classes para captura e processamento de dados via UDP.
 
 from .udp_receiver import UDPReceiver
 from .csv_data_logger import CSVDataLogger
+from .UDP import UDP
 
 # Imports opcionais para outros módulos
 try:
@@ -25,5 +26,6 @@ except ImportError:
 
 __all__ = [
     'UDPReceiver',
-    'CSVDataLogger'
+    'CSVDataLogger',
+    'UDP'
 ]

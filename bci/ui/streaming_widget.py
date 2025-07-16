@@ -11,22 +11,22 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                            QProgressBar, QTextEdit, QMessageBox, QCheckBox,
                            QLineEdit, QSpinBox)
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
-from bci.database.database_manager import DatabaseManager
-from bci.streaming_logic.streaming_thread import StreamingThread
-from bci.configs.config import get_recording_path
-from bci.ui.EEG_plot_widget import EEGPlotWidget
-from bci.AI.EEGNet import EEGNet
-from bci.network.UDP import UDP
+from ..database.database_manager import DatabaseManager
+from ..streaming_logic.streaming_thread import StreamingThread
+from ..configs.config import get_recording_path
+from .EEG_plot_widget import EEGPlotWidget
+from ..AI.EEGNet import EEGNet
+from ..network.UDP import UDP
 
 # Importar loggers
 try:
-    from bci.network.openbci_csv_logger import OpenBCICSVLogger
+    from ..network.openbci_csv_logger import OpenBCICSVLogger
     USE_OPENBCI_LOGGER = True
 except ImportError:
     USE_OPENBCI_LOGGER = False
 
 try:
-    from bci.network.simple_csv_logger import SimpleCSVLogger
+    from ..network.simple_csv_logger import SimpleCSVLogger
 except ImportError:
     SimpleCSVLogger = None
 
@@ -58,6 +58,10 @@ class StreamingWidget(QWidget):
         self.samples_since_last_prediction = 0
         self.predictions = deque(maxlen=50)  # Últimas predições
         self.eeg_buffer = deque(maxlen=1000)  # Buffer para dados EEG
+        
+        # Estados do servidor UDP
+        self.udp_server_active = False
+        self.game_mode = False
         self.game_mode = False  # Flag para modo jogo
         
     def setup_ui(self):
@@ -91,6 +95,55 @@ class StreamingWidget(QWidget):
         
         connection_group.setLayout(connection_layout)
         controls_layout.addWidget(connection_group)
+        
+        # Servidor UDP
+        udp_group = QGroupBox("Servidor UDP")
+        udp_layout = QVBoxLayout()
+        
+        # Primeira linha - status e controle do servidor
+        udp_row1 = QHBoxLayout()
+        
+        self.udp_status_label = QLabel("Servidor UDP: Desligado")
+        self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
+        
+        self.udp_toggle_btn = QPushButton("Iniciar Servidor UDP")
+        self.udp_toggle_btn.clicked.connect(self.toggle_udp_server)
+        self.udp_toggle_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        
+        # Checkbox para habilitar/desabilitar envio automático
+        self.udp_auto_send_checkbox = QCheckBox("Envio Automático")
+        self.udp_auto_send_checkbox.setChecked(True)
+        self.udp_auto_send_checkbox.setToolTip("Quando marcado, envia sinais UDP automaticamente durante as predições")
+        
+        udp_row1.addWidget(self.udp_status_label)
+        udp_row1.addWidget(self.udp_toggle_btn)
+        udp_row1.addWidget(self.udp_auto_send_checkbox)
+        udp_row1.addStretch()
+        
+        # Segunda linha - testes manuais
+        udp_row2 = QHBoxLayout()
+        
+        udp_test_label = QLabel("Teste Manual:")
+        self.udp_test_left_btn = QPushButton("🤚 Mão Esquerda")
+        self.udp_test_left_btn.clicked.connect(lambda: self.manual_udp_test('esquerda'))
+        self.udp_test_left_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        self.udp_test_left_btn.setEnabled(False)
+        
+        self.udp_test_right_btn = QPushButton("✋ Mão Direita")
+        self.udp_test_right_btn.clicked.connect(lambda: self.manual_udp_test('direita'))
+        self.udp_test_right_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        self.udp_test_right_btn.setEnabled(False)
+        
+        udp_row2.addWidget(udp_test_label)
+        udp_row2.addWidget(self.udp_test_left_btn)
+        udp_row2.addWidget(self.udp_test_right_btn)
+        udp_row2.addStretch()
+        
+        udp_layout.addLayout(udp_row1)
+        udp_layout.addLayout(udp_row2)
+        
+        udp_group.setLayout(udp_layout)
+        controls_layout.addWidget(udp_group)
         
         # Gravação
         recording_group = QGroupBox("Gravação")
@@ -279,6 +332,64 @@ class StreamingWidget(QWidget):
             self.streaming_thread.stop_streaming()
             self.connect_btn.setText("Conectar")
             self.record_btn.setEnabled(False)
+    
+    def toggle_udp_server(self):
+        """Liga/desliga o servidor UDP"""
+        if not self.udp_server_active:
+            # Iniciar servidor UDP
+            try:
+                UDP.init_zmq_socket()  # Agora já envia o broadcast automaticamente
+                self.udp_server_active = True
+                self.udp_status_label.setText("Servidor UDP: Ligado")
+                self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
+                self.udp_toggle_btn.setText("Parar Servidor UDP")
+                self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+                
+                # Habilitar botões de teste
+                self.udp_test_left_btn.setEnabled(True)
+                self.udp_test_right_btn.setEnabled(True)
+                
+                QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Erro ao iniciar servidor UDP: {e}")
+        else:
+            # Parar servidor UDP
+            try:
+                UDP.stop_zmq_socket()  # Usar o novo método para parar
+                self.udp_server_active = False
+                self.udp_status_label.setText("Servidor UDP: Desligado")
+                self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
+                self.udp_toggle_btn.setText("Iniciar Servidor UDP")
+                self.udp_toggle_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+                
+                # Desabilitar botões de teste
+                self.udp_test_left_btn.setEnabled(False)
+                self.udp_test_right_btn.setEnabled(False)
+                
+                QMessageBox.information(self, "Sucesso", "Servidor UDP parado com sucesso!")
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Erro ao parar servidor UDP: {e}")
+    
+    def manual_udp_test(self, direction):
+        """Teste manual do envio UDP"""
+        if self.udp_server_active:
+            success = UDP.enviar_sinal(direction)
+            if success:
+                side_text = "esquerda" if direction == 'esquerda' else "direita"
+                QMessageBox.information(self, "Teste UDP", f"Sinal enviado: Mão {side_text}")
+            else:
+                QMessageBox.critical(self, "Erro", "Falha ao enviar sinal UDP!")
+        else:
+            QMessageBox.warning(self, "Aviso", "Servidor UDP não está ativo!")
+    
+    def send_udp_signal(self, direction):
+        """Envia sinal UDP se o servidor estiver ativo e o envio automático estiver habilitado"""
+        if self.udp_server_active and self.udp_auto_send_checkbox.isChecked():
+            success = UDP.enviar_sinal(direction)
+            if not success:
+                print(f"Falha ao enviar sinal UDP para {direction}")
+            return success
+        return False
     
     def toggle_recording(self):
         """Inicia/para a gravação"""
@@ -606,10 +717,10 @@ class StreamingWidget(QWidget):
             self.prediction_label.setText(classes[pred])
             if classes[pred] == '🤚 Mão Esquerda':
                 self.prob_left_label.setText(f"Mão Esquerda: {left_prob:.1%}")
-                UDP.enviar_sinal('esquerda')  # Enviar sinal UDP
+                self.send_udp_signal('esquerda')  # Enviar sinal UDP
             else:
                 self.prob_right_label.setText(f"Mão Direita: {right_prob:.1%}")
-                UDP.enviar_sinal('direita') 
+                self.send_udp_signal('direita')  # Enviar sinal UDP 
             
             # Atualizar estilo baseado na predição
             if pred == 0:  # Mão esquerda

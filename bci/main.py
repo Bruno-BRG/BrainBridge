@@ -8,6 +8,9 @@ Funcionalidades:
 """
 
 import sys
+import os
+import time
+import random
 import sqlite3
 import os
 import threading
@@ -31,36 +34,74 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+# Detectar se estamos executando como módulo ou script direto
+if __name__ == "__main__" and __package__ is None:
+    # Executando como script direto, adicionar o diretório pai ao path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.insert(0, parent_dir)
+    
+    # Usar imports absolutos
+    from bci.configs.config import get_recording_path, get_database_path, ensure_folders_exist
+else:
+    # Executando como módulo, usar imports relativos
+    from .configs.config import get_recording_path, get_database_path, ensure_folders_exist
+
 # Importar configuração de caminhos
-from bci.configs.config import get_recording_path, get_database_path, ensure_folders_exist
 
 # Importar o logger OpenBCI
-try:
-    from bci.network.openbci_csv_logger import OpenBCICSVLogger
-    USE_OPENBCI_LOGGER = True
-except ImportError:
-    USE_OPENBCI_LOGGER = False
-    print("OpenBCI Logger não encontrado, usando logger simples")
+if __name__ == "__main__" and __package__ is None:
+    # Executando como script direto
+    try:
+        from bci.network.openbci_csv_logger import OpenBCICSVLogger
+        USE_OPENBCI_LOGGER = True
+    except ImportError:
+        USE_OPENBCI_LOGGER = False
+        print("OpenBCI Logger não encontrado, usando logger simples")
+else:
+    # Executando como módulo
+    try:
+        from .network.openbci_csv_logger import OpenBCICSVLogger
+        USE_OPENBCI_LOGGER = True
+    except ImportError:
+        USE_OPENBCI_LOGGER = False
+        print("OpenBCI Logger não encontrado, usando logger simples")
 
 
 # Importar módulos do sistema existente
 import csv
 
 # Importar logger simples
-try:
-    from bci.network.simple_csv_logger import SimpleCSVLogger
-except ImportError:
-    SimpleCSVLogger = None
+if __name__ == "__main__" and __package__ is None:
+    try:
+        from bci.network.simple_csv_logger import SimpleCSVLogger
+    except ImportError:
+        SimpleCSVLogger = None
+else:
+    try:
+        from .network.simple_csv_logger import SimpleCSVLogger
+    except ImportError:
+        SimpleCSVLogger = None
 
 # Não precisa adicionar ao path pois os módulos estão na mesma pasta agora
-try:
-    from bci.network.udp_receiver import UDPReceiver
-    from bci.network.realtime_udp_converter import RealTimeUDPConverter
-    from bci.network.csv_data_logger import CSVDataLogger
-    print("Módulos do sistema carregados com sucesso")
-except ImportError as e:
-    print(f"Erro ao importar módulos: {e}")
-    print("Usando modo de simulação")
+if __name__ == "__main__" and __package__ is None:
+    try:
+        from bci.network.udp_receiver import UDPReceiver
+        from bci.network.realtime_udp_converter import RealTimeUDPConverter
+        from bci.network.csv_data_logger import CSVDataLogger
+        print("Módulos do sistema carregados com sucesso")
+    except ImportError as e:
+        print(f"Erro ao importar módulos: {e}")
+        print("Usando modo de simulação")
+else:
+    try:
+        from .network.udp_receiver import UDPReceiver
+        from .network.realtime_udp_converter import RealTimeUDPConverter
+        from .network.csv_data_logger import CSVDataLogger
+        print("Módulos do sistema carregados com sucesso")
+    except ImportError as e:
+        print(f"Erro ao importar módulos: {e}")
+        print("Usando modo de simulação")
     # Criar classes mock para desenvolvimento
     class UDPReceiver:
         def __init__(self, host, port): 
@@ -100,11 +141,18 @@ except ImportError as e:
 
 
 # Importar a janela principal
-try:
-    from bci.ui.BCI_main_window import BCIMainWindow
-except ImportError as e:
-    print(f"Erro ao importar BCIMainWindow: {e}")
-    BCIMainWindow = None
+if __name__ == "__main__" and __package__ is None:
+    try:
+        from bci.ui.BCI_main_window import BCIMainWindow
+    except ImportError as e:
+        print(f"Erro ao importar BCIMainWindow: {e}")
+        BCIMainWindow = None
+else:
+    try:
+        from .ui.BCI_main_window import BCIMainWindow
+    except ImportError as e:
+        print(f"Erro ao importar BCIMainWindow: {e}")
+        BCIMainWindow = None
 
 
 def main():

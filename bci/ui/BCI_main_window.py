@@ -4,9 +4,9 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QLabel,
                            QTabWidget, QApplication)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
-from bci.database.database_manager import DatabaseManager
-from bci.ui.patient_registration_widget import PatientRegistrationWidget
-from bci.ui.streaming_widget import StreamingWidget
+from ..database.database_manager import DatabaseManager
+from .patient_registration_widget import PatientRegistrationWidget
+from .streaming_widget import StreamingWidget
 
 class BCIMainWindow(QMainWindow):
     """Janela principal da aplicação BCI"""
