@@ -452,7 +452,7 @@ class StreamingWidget(QWidget):
                 
                 # Registrar gravação no banco
                 recording_path = display_path if USE_OPENBCI_LOGGER else filename
-                self.db_manager.add_recording(self.current_patient_id, recording_path)
+                self.db_manager.add_recording(self.current_patient_id, recording_path, task)
                 
                 # Iniciar timer de sessão
                 self.session_start_time = time.time()
