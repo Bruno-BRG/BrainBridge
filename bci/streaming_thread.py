@@ -1,3 +1,12 @@
+import time
+import socket
+import json
+import numpy as np
+import torch
+from collections import deque
+from PyQt5.QtCore import QThread, pyqtSignal
+from udp_receiver import UDPReceiver
+
 class StreamingThread(QThread):
     """Thread para streaming de dados"""
     

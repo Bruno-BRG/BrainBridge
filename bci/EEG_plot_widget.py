@@ -1,3 +1,12 @@
+import numpy as np
+from collections import deque
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
+                           QComboBox, QLabel)
+from PyQt5.QtCore import QTimer
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+
 class EEGPlotWidget(QWidget):
     """Widget para plotar dados EEG em tempo real"""
     

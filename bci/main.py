@@ -32,28 +32,31 @@ import torch.nn as nn
 import numpy as np
 
 # Importar configuração de caminhos
-from bci.config import get_recording_path, get_database_path, ensure_folders_exist
+from config import get_recording_path, get_database_path, ensure_folders_exist
 
 # Importar o logger OpenBCI
 try:
-    from bci.openbci_csv_logger import OpenBCICSVLogger
+    from openbci_csv_logger import OpenBCICSVLogger
     USE_OPENBCI_LOGGER = True
 except ImportError:
     USE_OPENBCI_LOGGER = False
     print("OpenBCI Logger não encontrado, usando logger simples")
 
 
-
 # Importar módulos do sistema existente
-import sys
-import os
 import csv
+
+# Importar logger simples
+try:
+    from simple_csv_logger import SimpleCSVLogger
+except ImportError:
+    SimpleCSVLogger = None
 
 # Não precisa adicionar ao path pois os módulos estão na mesma pasta agora
 try:
-    from bci.udp_receiver import UDPReceiver
-    from bci.realtime_udp_converter import RealTimeUDPConverter
-    from bci.csv_data_logger import CSVDataLogger
+    from udp_receiver import UDPReceiver
+    from realtime_udp_converter import RealTimeUDPConverter
+    from csv_data_logger import CSVDataLogger
     print("Módulos do sistema carregados com sucesso")
 except ImportError as e:
     print(f"Erro ao importar módulos: {e}")
@@ -83,8 +86,56 @@ except ImportError as e:
             # Simular dados EEG para desenvolvimento
             return np.random.randn(16) * 50
     
-    # Usar nosso logger simples
-    CSVDataLogger = SimpleCSVLogger
+    # Usar nosso logger simples se disponível
+    if SimpleCSVLogger:
+        CSVDataLogger = SimpleCSVLogger
+    else:
+        # Criar um logger mock básico
+        class CSVDataLogger:
+            def __init__(self, filename): 
+                self.filename = filename
+            def start_logging(self): pass
+            def stop_logging(self): pass
+            def log_data(self, data): pass
+
+
+# Importar a janela principal
+try:
+    from BCI_main_window import BCIMainWindow
+except ImportError as e:
+    print(f"Erro ao importar BCIMainWindow: {e}")
+    BCIMainWindow = None
+
+
+def main():
+    """Função principal do sistema BCI"""
+    # Garantir que as pastas necessárias existam
+    ensure_folders_exist()
+    
+    # Criar aplicação PyQt5
+    app = QApplication(sys.argv)
+    
+    if BCIMainWindow:
+        # Usar a interface principal modularizada
+        window = BCIMainWindow()
+        window.show()
+    else:
+        # Mostrar erro se não conseguir carregar a interface
+        from PyQt5.QtWidgets import QMessageBox
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Critical)
+        msg.setWindowTitle("Erro")
+        msg.setText("Não foi possível carregar a interface principal do sistema BCI.")
+        msg.setDetailedText("Verifique se todos os módulos estão instalados corretamente.")
+        msg.exec_()
+        return
+    
+    # Executar aplicação
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
 
 
 

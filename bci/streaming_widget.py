@@ -1,3 +1,34 @@
+import os
+import threading
+import time
+from datetime import datetime
+from typing import Optional
+from collections import deque
+import numpy as np
+import torch
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+                           QPushButton, QGroupBox, QComboBox, QGridLayout,
+                           QProgressBar, QTextEdit, QMessageBox, QCheckBox,
+                           QLineEdit, QSpinBox)
+from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
+from database_manager import DatabaseManager
+from streaming_thread import StreamingThread
+from config import get_recording_path
+from EEG_plot_widget import EEGPlotWidget
+from EEGNet import EEGNet
+
+# Importar loggers
+try:
+    from openbci_csv_logger import OpenBCICSVLogger
+    USE_OPENBCI_LOGGER = True
+except ImportError:
+    USE_OPENBCI_LOGGER = False
+
+try:
+    from simple_csv_logger import SimpleCSVLogger
+except ImportError:
+    SimpleCSVLogger = None
+
 class StreamingWidget(QWidget):
     """Widget para streaming e gravação de dados"""
     

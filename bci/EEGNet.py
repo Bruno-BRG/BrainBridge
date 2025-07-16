@@ -1,3 +1,5 @@
+import torch.nn as nn
+
 class EEGNet(nn.Module):
     """Modelo EEGNet que coincide exatamente com o arquivo salvo"""
     def __init__(self, n_channels=16, n_classes=2, n_samples=400, dropout_rate=0.5):

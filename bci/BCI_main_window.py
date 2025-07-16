@@ -1,9 +1,35 @@
+
+import sys
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QLabel, 
+                           QTabWidget, QApplication)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
+from database_manager import DatabaseManager
+from patient_registration_widget import PatientRegistrationWidget
+from streaming_widget import StreamingWidget
+
 class BCIMainWindow(QMainWindow):
     """Janela principal da aplicação BCI"""
     
     def __init__(self):
         super().__init__()
-        self.db_manager = DatabaseManager()
+        
+        # Inicializar gerenciador de banco de dados
+        try:
+            self.db_manager = DatabaseManager()
+            # Testar conexão
+            if self.db_manager.test_connection():
+                print("Sistema BCI inicializado com banco de dados funcionando")
+            else:
+                print("Aviso: Problemas com o banco de dados")
+        except Exception as e:
+            print(f"Erro ao inicializar banco de dados: {e}")
+            # Tentar criar novamente
+            try:
+                self.db_manager = DatabaseManager()
+            except Exception as e2:
+                print(f"Falha crítica no banco de dados: {e2}")
+                
         self.setup_ui()
         
     def setup_ui(self):
