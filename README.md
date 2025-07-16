@@ -1,246 +1,209 @@
-# EEG Motor Imagery Classification Project
+# Sistema BCI - Interface PyQt5 com Marcadores
 
-This project implements a complete pipeline for EEG motor imagery classification using the EEGInceptionERP model from braindecode. The system can classify left vs right hand motor imagery from EEG signals.
+## 🚀 Como Executar (ATUALIZADO)
 
-## 🎯 Project Overview
+### ✨ Opção 1: Script Principal (Recomendado)
+```bash
+cd projetoBCI
+python run_bci.py
+```
 
-- **Objective**: Classify motor imagery tasks (left vs right hand) from EEG signals
-- **Dataset**: PhysioNet Motor Movement/Imagery Dataset (runs 4, 8, 12)
-- **Model**: EEGInceptionERP - A state-of-the-art CNN architecture for EEG classification
-- **Framework**: PyTorch with custom data loading and preprocessing
+### ✨ Opção 2: Como Módulo Python
+```bash
+cd projetoBCI
+python -m bci
+```
 
-## 📁 Project Structure
+### ✨ Opção 3: Usando o módulo bci diretamente
+```python
+import bci
+bci.run()
+```
+
+## 📁 Estrutura Reorganizada
 
 ```
 projetoBCI/
-├── src/
-│   ├── data/
-│   │   ├── __init__.py
-│   │   └── data_loader.py          # EEG data loading and preprocessing
-│   └── model/
-│       ├── __init__.py
-│       └── eeg_inception_erp.py    # EEGInceptionERP model implementation
-├── eeg_data/                       # EEG dataset directory
-├── plots/                          # Training plots and visualizations
-├── requirements.txt                # Python dependencies
-├── train_model.py                  # Full training script with K-fold CV
-├── minimal_train.py               # Simple training example
-├── evaluate_model.py              # Model evaluation and inference
-├── simple_test.py                 # Basic functionality test
-└── README.md                      # This file
+├── 🎯 run_bci.py                    # ← SCRIPT PRINCIPAL
+├── bci/                             # Pacote principal organizado
+│   ├── __init__.py                  # Exports do pacote
+│   ├── main.py                      # Ponto de entrada limpo
+│   ├── BCI_main_window.py           # Janela principal
+│   ├── streaming_widget.py          # Interface de streaming
+│   ├── patient_registration_widget.py # Cadastro de pacientes
+│   └── ... (outros módulos)
+├── src/                             # Diretório legacy (depreciado)
+├── data/, models/, docs/            # Dados e documentação
+└── README.md                        # Este arquivo
 ```
 
-## 🚀 Quick Start
+### ✅ Interface Completa
+- **Cadastro de Pacientes**: Nome, idade, sexo, mão afetada, tempo desde evento
+- **Streaming em Tempo Real**: Visualização de dados EEG com gráficos sliding window
+- **Gravação Vinculada**: Arquivos CSV ligados ao paciente selecionado
+- **Marcadores T1/T2**: Botões para inserir marcadores durante a gravação
+- **Baseline Automático**: Timer de 5 minutos que bloqueia outros marcadores
+- **Auto T0**: Inserção automática de T0 após 400 amostras dos marcadores T1/T2
 
-### 1. Install Dependencies
+### 🗂️ Estrutura Organizada
+```
+projeto/
+├── src/                    # Código fonte principal
+│   ├── bci_interface.py   # Interface principal PyQt5
+│   ├── config.py          # Configuração de caminhos
+│   ├── udp_receiver.py    # Receptor UDP
+│   └── ...                # Outros módulos
+├── data/                  # Dados e gravações
+│   ├── recordings/        # Arquivos CSV de gravação
+│   └── database/          # Banco SQLite de pacientes
+├── tests/                 # Scripts de teste
+├── docs/                  # Documentação
+├── legacy/                # Arquivos antigos
+└── models/                # Modelos ML
+```
 
+## 🚀 Como Usar
+
+### 1. Instalação das Dependências
 ```bash
-pip install -r requirements.txt
+pip install PyQt5 numpy pandas matplotlib sqlite3
 ```
 
-### 2. Prepare Data
-
-Place your EEG data in the following structure:
-```
-eeg_data/
-└── MNE-eegbci-data/
-    └── files/
-        └── eegmmidb/
-            └── 1.0.0/
-                ├── S001/
-                │   ├── S001R04_csv_openbci.csv
-                │   ├── S001R08_csv_openbci.csv
-                │   └── S001R12_csv_openbci.csv
-                ├── S002/
-                └── ...
-```
-
-### 3. Test the Setup
-
+### 2. Executar a Interface
 ```bash
-python simple_test.py
+cd src
+python bci_interface.py
 ```
 
-### 4. Train the Model
-
-For a quick test with synthetic data:
+### 3. Teste da Interface
 ```bash
-python minimal_train.py
+cd tests
+python test_interface_markers.py
 ```
 
-For full training with real EEG data:
+## 🎮 Uso da Interface
+
+### Aba "Cadastro de Pacientes"
+1. Preencher dados do paciente
+2. Clicar em "Cadastrar Paciente"
+3. Visualizar lista de pacientes cadastrados
+
+### Aba "Streaming e Gravação"
+
+#### Conexão
+1. Configurar Host (localhost) e Porta (12345)
+2. Clicar "Conectar" (modo simulação se UDP não disponível)
+
+#### Gravação
+1. Selecionar paciente na lista
+2. Clicar "Iniciar Gravação"
+3. Os botões de marcadores são habilitados
+
+#### Marcadores
+- **T1** (Azul): Movimento Real
+  - Insere marcador T1 imediatamente
+  - Programa T0 para 400 amostras depois
+  
+- **T2** (Laranja): Movimento Imaginado
+  - Insere marcador T2 imediatamente
+  - Programa T0 para 400 amostras depois
+  
+- **Baseline** (Roxo): Período de Repouso
+  - Insere marcador BASELINE
+  - Bloqueia outros botões por 5 minutos
+  - Mostra countdown timer
+
+## 📊 Formato dos Arquivos CSV
+
+```csv
+Timestamp,EXG Channel 0,EXG Channel 1,...,EXG Channel 15,Marker
+2024-01-01T10:00:00.000,1.23,4.56,...,7.89,
+2024-01-01T10:00:00.004,2.34,5.67,...,8.90,T1
+2024-01-01T10:00:01.600,3.45,6.78,...,9.01,T0
+2024-01-01T10:02:00.000,4.56,7.89,...,0.12,BASELINE
+```
+
+## 🔧 Funcionalidades Técnicas
+
+### SimpleCSVLogger
+- Gravação thread-safe
+- Buffer para otimização
+- Suporte a marcadores
+- Auto-inserção de T0
+
+### Timer de Baseline
+- 5 minutos (300 segundos)
+- Countdown visual
+- Bloqueio automático de botões
+- Reabilitação automática
+
+### Estrutura de Banco
+```sql
+-- Tabela de pacientes
+patients: id, name, age, sex, affected_hand, time_since_event, created_at, notes
+
+-- Tabela de gravações
+recordings: id, patient_id, filename, start_time, notes
+```
+
+## 🧪 Modo de Simulação
+
+Se o UDP não estiver disponível, o sistema automaticamente entra em modo simulação:
+- Dados EEG simulados (ruído gaussiano)
+- Status "Simulação (Dados Fake)"
+- Todas as funcionalidades funcionam normalmente
+
+## 📝 Arquivos de Saída
+
+### Gravações
+- Local: `data/recordings/`
+- Formato: `patient_{id}_{nome}_{timestamp}.csv`
+- Conteúdo: 16 canais EEG + timestamp + marcadores
+
+### Banco de Dados
+- Local: `data/database/bci_patients.db`
+- Tabelas: patients, recordings
+- Backup automático recomendado
+
+## ⚡ Próximos Passos
+
+1. ✅ Interface PyQt5 completa
+2. ✅ Marcadores T1, T2, Baseline
+3. ✅ Timer de 5 minutos
+4. ✅ Auto T0 após 400 amostras
+5. ✅ Estrutura de pastas organizada
+6. 🔄 Integração com modelos ML
+7. 🔄 Análise em tempo real
+8. 🔄 Exportação para formatos padrão (EDF, etc.)
+
+## 🐛 Solução de Problemas
+
+### Erro de Import
 ```bash
-python train_model.py
+# Se módulos não forem encontrados
+cd src
+python bci_interface.py
 ```
 
-### 5. Evaluate the Model
+### Porta UDP Ocupada
+- O sistema detecta automaticamente
+- Entra em modo simulação
+- Funcionalidades completas mantidas
 
+### Dependências
 ```bash
-python evaluate_model.py
+pip install --upgrade PyQt5 numpy pandas matplotlib
 ```
 
-## 🔧 Key Components
+## 📞 Suporte
 
-### Data Loader (`src/data/data_loader.py`)
+Para problemas ou sugestões:
+1. Verificar logs no terminal
+2. Testar modo simulação
+3. Verificar estrutura de pastas
+4. Reinstalar dependências se necessário
 
-- **BCIDataLoader**: Main class for loading EEG data from CSV files
-- **BCIDataset**: PyTorch dataset class with data augmentation
-- Features:
-  - Bandpass filtering (0.5-50 Hz)
-  - Notch filtering (50 Hz power line noise)
-  - Z-score standardization
-  - Windowing with configurable overlap
-  - Event extraction from annotations
+---
 
-### Model (`src/model/eeg_inception_erp.py`)
-
-- **EEGInceptionERP**: Implementation based on braindecode
-- Features:
-  - Multi-scale inception blocks
-  - Depthwise separable convolutions
-  - Batch normalization and dropout
-  - Configurable architecture parameters
-
-### Training Pipeline
-
-- **K-fold Cross-Validation**: 5-fold cross-validation for robust performance evaluation
-- **EEGTrainer**: Complete training class with:
-  - Early stopping
-  - Learning rate scheduling
-  - Training history tracking
-  - Model checkpointing
-  - Cross-validation statistics
-
-## 📊 Model Architecture
-
-The EEGInceptionERP model uses:
-- **Input**: Multi-channel EEG signals (16 channels × time points)
-- **Inception blocks**: Multiple temporal scales (0.5s, 0.25s, 0.125s)
-- **Depthwise convolutions**: Spatial filtering
-- **Classification head**: Binary classification (left vs right hand)
-
-## 🎯 Performance
-
-The model achieves:
-- Fast training convergence (typically <20 epochs)
-- Good generalization with proper regularization
-- Real-time inference capability
-
-## 📈 Usage Examples
-
-### Loading Data
-```python
-from src.data.data_loader import BCIDataLoader
-
-loader = BCIDataLoader(
-    data_path="eeg_data",
-    subjects=[1, 2, 3],
-    runs=[4, 8, 12]
-)
-
-windows, labels, _ = loader.load_all_subjects()
-```
-
-### Creating Model
-```python
-from src.model.eeg_inception_erp import EEGInceptionERP
-
-model = EEGInceptionERP(
-    n_chans=16,
-    n_outputs=2,  # Updated parameter name
-    n_times=500,  # Updated parameter name
-    sfreq=125
-)
-```
-
-### Making Predictions
-```python
-model.eval()
-with torch.no_grad():
-    output = model(eeg_data)
-    predictions = torch.argmax(output, dim=1)
-```
-
-### K-fold Training
-```python
-# Run K-fold cross-validation training
-python train_model.py
-
-# This will:
-# 1. Split data into train/test sets
-# 2. Perform 5-fold CV on training data
-# 3. Train final model on all training data
-# 4. Evaluate on held-out test set
-# 5. Generate comprehensive plots
-```
-
-## 🔬 Customization
-
-### Model Parameters
-- `n_filters`: Number of initial filters (default: 8)
-- `drop_prob`: Dropout probability (default: 0.5)
-- `n_outputs`: Number of output classes (replaces deprecated n_classes)
-- `n_times`: Number of time samples (replaces deprecated input_window_samples)
-- `sfreq`: Sampling frequency in Hz
-
-### Data Processing
-- `window_length`: Window duration in seconds (default: 4.0)
-- `baseline_length`: Baseline period in seconds (default: 1.0)
-- `overlap`: Window overlap ratio (default: 0.5)
-
-### Training Parameters
-- `K_FOLDS`: Number of cross-validation folds (default: 5)
-- `TEST_SPLIT`: Test set proportion (default: 0.2)
-- `EARLY_STOPPING_PATIENCE`: Early stopping patience (default: 5)
-- `NUM_EPOCHS`: Maximum training epochs (default: 50)
-
-## 📊 Performance Evaluation
-
-The training script provides comprehensive evaluation through:
-
-### K-fold Cross-Validation
-- **Robust Performance Estimation**: 5-fold CV provides reliable performance metrics
-- **Statistical Analysis**: Mean accuracy ± standard deviation across folds
-- **Overfitting Detection**: Comparison of training vs validation performance
-
-### Visualization
-- Cross-validation accuracy distribution
-- Average learning curves across folds
-- Individual fold performance
-- Final model training curves
-- Comprehensive summary statistics
-
-### Performance Metrics
-- Individual fold accuracies
-- Mean CV accuracy with confidence intervals
-- Final test set accuracy
-- Training convergence analysis
-
-## 📝 Notes
-
-- The model uses 'same' padding which may generate warnings on certain PyTorch versions
-- For Windows users, set `num_workers=0` in DataLoader
-- GPU acceleration is supported if CUDA is available
-- Model checkpoints are automatically saved during training
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the BSD 3-Clause License.
-
-## 🙏 Acknowledgments
-
-- [Braindecode](https://braindecode.org/) for the EEGInceptionERP architecture
-- [PhysioNet](https://physionet.org/) for the EEG motor imagery dataset
-- PyTorch team for the deep learning framework
-
-## 📞 Support
-
-If you encounter any issues or have questions, please open an issue on GitHub.
+**Status**: ✅ Funcional - Interface completa com marcadores implementados
+**Última atualização**: Janeiro 2024
