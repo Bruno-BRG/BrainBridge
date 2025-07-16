@@ -619,11 +619,11 @@ class StreamingWidget(QWidget):
     def load_model(self):
         """Carrega modelo CNN para inferência"""
         try:
-            model_path = "models/best_model.pth"
+            model_path = "bci/models/best_model.pth"
             possible_paths = [
-                model_path,
-                f"../models/{os.path.basename(model_path)}",
-                os.path.join(os.getcwd(), "models", os.path.basename(model_path))
+            model_path,
+            f"../{model_path}",  
+            os.path.join(os.getcwd(), model_path)
             ]
             
             model_found = False
