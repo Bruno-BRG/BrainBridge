@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
-from ..network.udp_receiver import UDPReceiver
+from ..network.udp_receiver_BCI import UDPReceiver_BCI
 
 class StreamingThread(QThread):
     """Thread para streaming de dados"""
@@ -48,7 +48,7 @@ class StreamingThread(QThread):
         """Executa o streaming"""
         try:
             # Tentar configurar receptor UDP
-            self.udp_receiver = UDPReceiver(self.host, self.port)
+            self.udp_receiver = UDPReceiver_BCI(self.host, self.port)
             
             # Callback para dados recebidos
             def on_data_received(data):

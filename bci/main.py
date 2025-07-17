@@ -86,7 +86,7 @@ else:
 # Não precisa adicionar ao path pois os módulos estão na mesma pasta agora
 if __name__ == "__main__" and __package__ is None:
     try:
-        from bci.network.udp_receiver import UDPReceiver
+        from bci.network.udp_receiver_BCI import UDPReceiver
         from bci.network.realtime_udp_converter import RealTimeUDPConverter
         from bci.network.csv_data_logger import CSVDataLogger
         print("Módulos do sistema carregados com sucesso")
@@ -95,7 +95,7 @@ if __name__ == "__main__" and __package__ is None:
         print("Usando modo de simulação")
 else:
     try:
-        from .network.udp_receiver import UDPReceiver
+        from .network.udp_receiver_BCI import UDPReceiver
         from .network.realtime_udp_converter import RealTimeUDPConverter
         from .network.csv_data_logger import CSVDataLogger
         print("Módulos do sistema carregados com sucesso")

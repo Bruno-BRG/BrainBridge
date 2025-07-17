@@ -16,7 +16,7 @@ from ..streaming_logic.streaming_thread import StreamingThread
 from ..configs.config import get_recording_path
 from .EEG_plot_widget import EEGPlotWidget
 from ..AI.EEGNet import EEGNet
-from ..network.UDP import UDP
+from ..network.UDP_sender import UDP_sender
 
 # Importar loggers
 try:
@@ -365,7 +365,7 @@ class StreamingWidget(QWidget):
         if not self.udp_server_active:
             # Iniciar servidor UDP
             try:
-                UDP.init_zmq_socket()  # Agora já envia o broadcast automaticamente
+                UDP_sender.init_zmq_socket()  # Agora já envia o broadcast automaticamente
                 self.udp_server_active = True
                 self.udp_status_label.setText("Servidor UDP: Ligado")
                 self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
@@ -382,7 +382,7 @@ class StreamingWidget(QWidget):
         else:
             # Parar servidor UDP
             try:
-                UDP.stop_zmq_socket()  # Usar o novo método para parar
+                UDP_sender.stop_zmq_socket()  # Usar o novo método para parar
                 self.udp_server_active = False
                 self.udp_status_label.setText("Servidor UDP: Desligado")
                 self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
@@ -400,7 +400,7 @@ class StreamingWidget(QWidget):
     def manual_udp_test(self, direction):
         """Teste manual do envio UDP"""
         if self.udp_server_active:
-            success = UDP.enviar_sinal(direction)
+            success = UDP_sender.enviar_sinal(direction)
             if success:
                 side_text = "esquerda" if direction == 'esquerda' else "direita"
                 QMessageBox.information(self, "Teste UDP", f"Sinal enviado: Mão {side_text}")
@@ -412,7 +412,7 @@ class StreamingWidget(QWidget):
     def send_udp_signal(self, direction):
         """Envia sinal UDP se o servidor estiver ativo e o envio automático estiver habilitado"""
         if self.udp_server_active and self.udp_auto_send_checkbox.isChecked():
-            success = UDP.enviar_sinal(direction)
+            success = UDP_sender.enviar_sinal(direction)
             if not success:
                 print(f"Falha ao enviar sinal UDP para {direction}")
             return success
@@ -550,7 +550,7 @@ class StreamingWidget(QWidget):
                 # Enviar trigger apenas nos modos Teste e Treino
                 current_task = self.task_combo.currentText()
                 if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
-                    UDP.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
+                    UDP_sender.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
                     
             elif marker_type == "T2":
                 self.t2_counter += 1
@@ -559,7 +559,7 @@ class StreamingWidget(QWidget):
                 # Enviar trigger apenas nos modos Teste e Treino
                 current_task = self.task_combo.currentText()
                 if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
-                    UDP.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
+                    UDP_sender.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
 
             if USE_OPENBCI_LOGGER:
                 # Para o logger OpenBCI, verificar se baseline está ativo

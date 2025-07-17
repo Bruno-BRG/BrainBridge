@@ -2,7 +2,7 @@ import time
 import socket
 import zmq
 
-class UDP:
+class UDP_sender:
     # Class variable for ZMQ socket
     zmq_socket = None
 
@@ -151,4 +151,4 @@ class UDP:
             print("Programa encerrado.")
 
 if __name__ == '__main__':
-    UDP.main()
+    UDP_sender.main()
