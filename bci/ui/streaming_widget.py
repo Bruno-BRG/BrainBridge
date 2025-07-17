@@ -68,6 +68,10 @@ class StreamingWidget(QWidget):
         self.t1_counter = 0
         self.t2_counter = 0
         
+        # Timer para ações automáticas no jogo
+        self.game_action_timer = QTimer()
+        self.game_action_timer.timeout.connect(self.game_random_action)
+        
     def setup_ui(self):
         """Configura a interface"""
         layout = QVBoxLayout()
@@ -441,6 +445,9 @@ class StreamingWidget(QWidget):
                 self.prediction_label.setText("Aguardando predição...")
                 self.prob_left_label.setText("Mão Esquerda: 0%")
                 self.prob_right_label.setText("Mão Direita: 0%")
+                
+                # Iniciar timer para ações automáticas no jogo (a cada 3 segundos)
+                self.game_action_timer.start(3000)
             
             try:
                 # Usar logger OpenBCI se disponível
@@ -497,6 +504,11 @@ class StreamingWidget(QWidget):
             
             self.is_recording = False
             self.game_mode = False  # Desativar modo jogo
+            
+            # Parar timer de ações automáticas no jogo
+            if self.game_action_timer.isActive():
+                self.game_action_timer.stop()
+                
             self.update_record_button_text()  # Usar método que considera a tarefa
             self.recording_label.setText("Não gravando")
             self.recording_label.setStyleSheet("color: gray;")
@@ -518,6 +530,15 @@ class StreamingWidget(QWidget):
             
             QMessageBox.information(self, "Sucesso", "Gravação finalizada!")
     
+
+    def game_random_action(self):
+        """Executa uma ação aleatória no jogo"""
+        if self.is_recording and self.csv_logger:
+            import random
+            actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
+            action = random.choice(actions)
+            self.add_marker(action)
+
     def add_marker(self, marker_type):
         """Adiciona um marcador durante a gravação"""
         if self.is_recording and self.csv_logger:
@@ -528,7 +549,7 @@ class StreamingWidget(QWidget):
                 
                 # Enviar trigger apenas nos modos Teste e Treino
                 current_task = self.task_combo.currentText()
-                if current_task in ["Teste", "Treino"] and self.udp_server_active:
+                if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
                     UDP.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
                     
             elif marker_type == "T2":
@@ -537,7 +558,7 @@ class StreamingWidget(QWidget):
                 
                 # Enviar trigger apenas nos modos Teste e Treino
                 current_task = self.task_combo.currentText()
-                if current_task in ["Teste", "Treino"] and self.udp_server_active:
+                if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
                     UDP.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
 
             if USE_OPENBCI_LOGGER:
