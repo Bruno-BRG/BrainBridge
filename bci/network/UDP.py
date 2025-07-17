@@ -32,13 +32,13 @@ class UDP:
             sock.close()
 
     @classmethod
-    def enviar_sinal(cls, lado):
+    def enviar_sinal(cls, action):
         if cls.zmq_socket is None:
             print("Erro: Socket ZMQ não foi inicializado. Chame init_zmq_socket() primeiro.")
             return False
             
         try:
-            if lado.lower() == 'direita':
+            if action.lower() == 'direita':
                 cls.zmq_socket.send_string("RIGHT_HAND_CLOSE")
                 # Enviar comando de abrir após um pequeno delay (sem bloquear)
                 import threading
@@ -49,7 +49,7 @@ class UDP:
                 threading.Thread(target=send_open, daemon=True).start()
                 print("Sinal mão direita enviado")
                 return True
-            elif lado.lower() == 'esquerda':
+            elif action.lower() == 'esquerda':
                 cls.zmq_socket.send_string("LEFT_HAND_CLOSE")
                 # Enviar comando de abrir após um pequeno delay (sem bloquear)
                 import threading
@@ -60,8 +60,26 @@ class UDP:
                 threading.Thread(target=send_open, daemon=True).start()
                 print("Sinal mão esquerda enviado")
                 return True
+            elif action.lower() == 'trigger_right':
+                import threading
+                def send_trigger():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("TRIGGER_RIGHT")
+                threading.Thread(target=send_trigger, daemon=True).start()
+                print("Sinal de gatilho mão direita enviado")
+                return True
+            elif action.lower() == 'trigger_left':
+                import threading
+                def send_trigger():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("TRIGGER_LEFT")
+                threading.Thread(target=send_trigger, daemon=True).start()
+                print("Sinal de gatilho mão esquerda enviado")
+                return True
             else:
-                print("Entrada inválida. Use 'direita' ou 'esquerda'")
+                print("Entrada inválida.")
                 return False
         except Exception as e:
             print(f"Erro ao enviar sinal: {e}")

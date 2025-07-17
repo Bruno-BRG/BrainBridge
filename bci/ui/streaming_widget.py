@@ -64,6 +64,10 @@ class StreamingWidget(QWidget):
         self.game_mode = False
         self.game_mode = False  # Flag para modo jogo
         
+        # Contadores para marcadores
+        self.t1_counter = 0
+        self.t2_counter = 0
+        
     def setup_ui(self):
         """Configura a interface"""
         layout = QVBoxLayout()
@@ -191,7 +195,10 @@ class StreamingWidget(QWidget):
         
         # Segunda linha - marcadores
         markers_group = QGroupBox("Marcadores")
-        markers_layout = QHBoxLayout()
+        markers_layout = QVBoxLayout()
+        
+        # Primeira linha - botões de marcadores
+        buttons_row = QHBoxLayout()
         
         # Botões de marcadores
         self.t1_btn = QPushButton("T1 - Movimento Real")
@@ -215,11 +222,27 @@ class StreamingWidget(QWidget):
         self.baseline_time_remaining = 0
         self.baseline_label = QLabel("")
         
-        markers_layout.addWidget(self.t1_btn)
-        markers_layout.addWidget(self.t2_btn)
-        markers_layout.addWidget(self.baseline_btn)
-        markers_layout.addWidget(self.baseline_label)
-        markers_layout.addStretch()
+        buttons_row.addWidget(self.t1_btn)
+        buttons_row.addWidget(self.t2_btn)
+        buttons_row.addWidget(self.baseline_btn)
+        buttons_row.addWidget(self.baseline_label)
+        buttons_row.addStretch()
+        
+        # Segunda linha - contadores
+        counters_row = QHBoxLayout()
+        
+        self.t1_counter_label = QLabel("T1: 0")
+        self.t1_counter_label.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 14px;")
+        
+        self.t2_counter_label = QLabel("T2: 0")
+        self.t2_counter_label.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 14px;")
+        
+        counters_row.addWidget(self.t1_counter_label)
+        counters_row.addWidget(self.t2_counter_label)
+        counters_row.addStretch()
+        
+        markers_layout.addLayout(buttons_row)
+        markers_layout.addLayout(counters_row)
         
         markers_group.setLayout(markers_layout)
         
@@ -450,6 +473,12 @@ class StreamingWidget(QWidget):
                 self.t2_btn.setEnabled(True)
                 self.baseline_btn.setEnabled(True)
                 
+                # Resetar contadores
+                self.t1_counter = 0
+                self.t2_counter = 0
+                self.t1_counter_label.setText("T1: 0")
+                self.t2_counter_label.setText("T2: 0")
+                
                 # Registrar gravação no banco
                 recording_path = display_path if USE_OPENBCI_LOGGER else filename
                 self.db_manager.add_recording(self.current_patient_id, recording_path, task)
@@ -492,6 +521,25 @@ class StreamingWidget(QWidget):
     def add_marker(self, marker_type):
         """Adiciona um marcador durante a gravação"""
         if self.is_recording and self.csv_logger:
+            # Incrementar contador
+            if marker_type == "T1":
+                self.t1_counter += 1
+                self.t1_counter_label.setText(f"T1: {self.t1_counter}")
+                
+                # Enviar trigger apenas nos modos Teste e Treino
+                current_task = self.task_combo.currentText()
+                if current_task in ["Teste", "Treino"] and self.udp_server_active:
+                    UDP.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
+                    
+            elif marker_type == "T2":
+                self.t2_counter += 1
+                self.t2_counter_label.setText(f"T2: {self.t2_counter}")
+                
+                # Enviar trigger apenas nos modos Teste e Treino
+                current_task = self.task_combo.currentText()
+                if current_task in ["Teste", "Treino"] and self.udp_server_active:
+                    UDP.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
+
             if USE_OPENBCI_LOGGER:
                 # Para o logger OpenBCI, verificar se baseline está ativo
                 if hasattr(self.csv_logger, 'is_baseline_active'):
