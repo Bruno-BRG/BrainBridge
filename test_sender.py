@@ -78,6 +78,42 @@ class UDP:
                 threading.Thread(target=send_trigger, daemon=True).start()
                 print("Sinal de gatilho mão esquerda enviado")
                 return True
+            elif action.lower() == 'redleft':
+                import threading
+                def send_redleft():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("RED_FLOWER,TRIGGER_ACTION_LEFT")
+                threading.Thread(target=send_redleft, daemon=True).start()
+                print("Sinal de flor vermelha mão esquerda enviado")
+                return True
+            elif action.lower() == 'redright':
+                import threading
+                def send_redright():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("RED_FLOWER,TRIGGER_ACTION_RIGHT")
+                threading.Thread(target=send_redright, daemon=True).start()
+                print("Sinal de flor vermelha mão direita enviado")
+                return True
+            elif action.lower() == 'blueleft':
+                import threading
+                def send_blueleft():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("BLUE_FLOWER,TRIGGER_ACTION_LEFT")
+                threading.Thread(target=send_blueleft, daemon=True).start()
+                print("Sinal de flor azul mão esquerda enviado")
+                return True
+            elif action.lower() == 'blueright':
+                import threading
+                def send_blueright():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("BLUE_FLOWER,TRIGGER_ACTION_RIGHT")
+                threading.Thread(target=send_blueright, daemon=True).start()
+                print("Sinal de flor azul mão direita enviado")
+                return True
             else:
                 print("Entrada inválida.")
                 return False

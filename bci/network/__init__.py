@@ -7,7 +7,7 @@ Este módulo contém classes para captura e processamento de dados via UDP.
 from .udp_receiver_BCI import UDPReceiver_BCI
 from .csv_data_logger import CSVDataLogger
 from .UDP_sender import UDP_sender
-from .UDP_receiver import UDP_receiver
+from .udp_receiver import UDP_receiver
 
 # Imports opcionais para outros módulos
 try:
