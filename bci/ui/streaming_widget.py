@@ -1,6 +1,8 @@
 import os
 import threading
 import time
+import zmq
+import socket
 from datetime import datetime
 from typing import Optional
 from collections import deque
@@ -16,7 +18,7 @@ from ..streaming_logic.streaming_thread import StreamingThread
 from ..configs.config import get_recording_path
 from .EEG_plot_widget import EEGPlotWidget
 from ..AI.EEGNet import EEGNet
-from ..network.UDP import UDP
+from ..network.UDP_sender import UDP_sender
 
 # Importar loggers
 try:
@@ -30,8 +32,17 @@ try:
 except ImportError:
     SimpleCSVLogger = None
 
+# Importar UDP_receiver existente
+try:
+    from ..network.udp_receiver import UDP_receiver
+except ImportError:
+    UDP_receiver = None
+
 class StreamingWidget(QWidget):
     """Widget para streaming e gravação de dados"""
+    
+    # Signal para processar mensagens de acurácia de forma thread-safe
+    accuracy_message_signal = pyqtSignal(str)
     
     def __init__(self, db_manager: DatabaseManager, parent=None):
         super().__init__(parent)
@@ -63,6 +74,26 @@ class StreamingWidget(QWidget):
         self.udp_server_active = False
         self.game_mode = False
         self.game_mode = False  # Flag para modo jogo
+        
+        # Contadores para marcadores
+        self.t1_counter = 0
+        self.t2_counter = 0
+        
+        # Timer para ações automáticas no jogo
+        self.game_action_timer = QTimer()
+        self.game_action_timer.timeout.connect(self.game_random_action)
+        
+        # Variáveis para cálculo de acurácia
+        self.accuracy_data = []  # Lista de tuplas (cor_esperada, trigger_real)
+        self.accuracy_correct = 0
+        self.accuracy_total = 0
+        
+        # UDP receiver para acurácia (recebe mensagens do sistema externo)
+        self.accuracy_udp_receiver = None
+        self.accuracy_thread = None
+        
+        # Conectar signal para processar mensagens de acurácia
+        self.accuracy_message_signal.connect(self.process_accuracy_message)
         
     def setup_ui(self):
         """Configura a interface"""
@@ -191,7 +222,10 @@ class StreamingWidget(QWidget):
         
         # Segunda linha - marcadores
         markers_group = QGroupBox("Marcadores")
-        markers_layout = QHBoxLayout()
+        markers_layout = QVBoxLayout()
+        
+        # Primeira linha - botões de marcadores
+        buttons_row = QHBoxLayout()
         
         # Botões de marcadores
         self.t1_btn = QPushButton("T1 - Movimento Real")
@@ -215,11 +249,27 @@ class StreamingWidget(QWidget):
         self.baseline_time_remaining = 0
         self.baseline_label = QLabel("")
         
-        markers_layout.addWidget(self.t1_btn)
-        markers_layout.addWidget(self.t2_btn)
-        markers_layout.addWidget(self.baseline_btn)
-        markers_layout.addWidget(self.baseline_label)
-        markers_layout.addStretch()
+        buttons_row.addWidget(self.t1_btn)
+        buttons_row.addWidget(self.t2_btn)
+        buttons_row.addWidget(self.baseline_btn)
+        buttons_row.addWidget(self.baseline_label)
+        buttons_row.addStretch()
+        
+        # Segunda linha - contadores
+        counters_row = QHBoxLayout()
+        
+        self.t1_counter_label = QLabel("T1: 0")
+        self.t1_counter_label.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 14px;")
+        
+        self.t2_counter_label = QLabel("T2: 0")
+        self.t2_counter_label.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 14px;")
+        
+        counters_row.addWidget(self.t1_counter_label)
+        counters_row.addWidget(self.t2_counter_label)
+        counters_row.addStretch()
+        
+        markers_layout.addLayout(buttons_row)
+        markers_layout.addLayout(counters_row)
         
         markers_group.setLayout(markers_layout)
         
@@ -262,6 +312,27 @@ class StreamingWidget(QWidget):
 
         game_group.setLayout(game_layout)
         layout.addWidget(game_group)
+        
+        # Accuracy group (só aparece no modo jogo)
+        accuracy_group = QGroupBox("Acurácia do Modelo")
+        accuracy_group.setVisible(False)  # Inicialmente oculto
+        self.accuracy_group = accuracy_group
+        accuracy_layout = QHBoxLayout()
+        
+        # Label principal de acurácia
+        self.accuracy_label = QLabel("Acurácia: 0% (0/0)")
+        self.accuracy_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #4CAF50;")
+        
+        # Labels para detalhes
+        self.accuracy_details_label = QLabel("Esperado vs Real")
+        self.accuracy_details_label.setStyleSheet("color: gray; font-size: 12px;")
+        
+        accuracy_layout.addWidget(self.accuracy_label)
+        accuracy_layout.addWidget(self.accuracy_details_label)
+        accuracy_layout.addStretch()
+        
+        accuracy_group.setLayout(accuracy_layout)
+        layout.addWidget(accuracy_group)
         
         # Stats group
         stats_group = QGroupBox("Estatísticas do Jogo")
@@ -338,7 +409,7 @@ class StreamingWidget(QWidget):
         if not self.udp_server_active:
             # Iniciar servidor UDP
             try:
-                UDP.init_zmq_socket()  # Agora já envia o broadcast automaticamente
+                UDP_sender.init_zmq_socket()  # Agora já envia o broadcast automaticamente
                 self.udp_server_active = True
                 self.udp_status_label.setText("Servidor UDP: Ligado")
                 self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
@@ -355,7 +426,7 @@ class StreamingWidget(QWidget):
         else:
             # Parar servidor UDP
             try:
-                UDP.stop_zmq_socket()  # Usar o novo método para parar
+                UDP_sender.stop_zmq_socket()  # Usar o novo método para parar
                 self.udp_server_active = False
                 self.udp_status_label.setText("Servidor UDP: Desligado")
                 self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
@@ -373,7 +444,7 @@ class StreamingWidget(QWidget):
     def manual_udp_test(self, direction):
         """Teste manual do envio UDP"""
         if self.udp_server_active:
-            success = UDP.enviar_sinal(direction)
+            success = UDP_sender.enviar_sinal(direction)
             if success:
                 side_text = "esquerda" if direction == 'esquerda' else "direita"
                 QMessageBox.information(self, "Teste UDP", f"Sinal enviado: Mão {side_text}")
@@ -385,7 +456,7 @@ class StreamingWidget(QWidget):
     def send_udp_signal(self, direction):
         """Envia sinal UDP se o servidor estiver ativo e o envio automático estiver habilitado"""
         if self.udp_server_active and self.udp_auto_send_checkbox.isChecked():
-            success = UDP.enviar_sinal(direction)
+            success = UDP_sender.enviar_sinal(direction)
             if not success:
                 print(f"Falha ao enviar sinal UDP para {direction}")
             return success
@@ -418,6 +489,21 @@ class StreamingWidget(QWidget):
                 self.prediction_label.setText("Aguardando predição...")
                 self.prob_left_label.setText("Mão Esquerda: 0%")
                 self.prob_right_label.setText("Mão Direita: 0%")
+                
+                # Resetar dados de acurácia
+                self.reset_accuracy_data()
+                
+                # Iniciar UDP receiver para acurácia
+                if UDP_receiver:
+                    try:
+                        self.start_accuracy_udp_receiver()
+                    except Exception as e:
+                        print(f"Erro ao iniciar UDP receiver de acurácia: {e}")
+                else:
+                    print("UDP_receiver não disponível para acurácia")
+                
+                # Iniciar timer para ações automáticas no jogo (a cada 3 segundos)
+                self.game_action_timer.start(3000)
             
             try:
                 # Usar logger OpenBCI se disponível
@@ -450,9 +536,15 @@ class StreamingWidget(QWidget):
                 self.t2_btn.setEnabled(True)
                 self.baseline_btn.setEnabled(True)
                 
+                # Resetar contadores
+                self.t1_counter = 0
+                self.t2_counter = 0
+                self.t1_counter_label.setText("T1: 0")
+                self.t2_counter_label.setText("T2: 0")
+                
                 # Registrar gravação no banco
                 recording_path = display_path if USE_OPENBCI_LOGGER else filename
-                self.db_manager.add_recording(self.current_patient_id, recording_path)
+                self.db_manager.add_recording(self.current_patient_id, recording_path, task)
                 
                 # Iniciar timer de sessão
                 self.session_start_time = time.time()
@@ -468,6 +560,14 @@ class StreamingWidget(QWidget):
             
             self.is_recording = False
             self.game_mode = False  # Desativar modo jogo
+            
+            # Parar UDP receiver de acurácia
+            self.stop_accuracy_udp_receiver()
+            
+            # Parar timer de ações automáticas no jogo
+            if self.game_action_timer.isActive():
+                self.game_action_timer.stop()
+                
             self.update_record_button_text()  # Usar método que considera a tarefa
             self.recording_label.setText("Não gravando")
             self.recording_label.setStyleSheet("color: gray;")
@@ -489,9 +589,37 @@ class StreamingWidget(QWidget):
             
             QMessageBox.information(self, "Sucesso", "Gravação finalizada!")
     
+
+    def game_random_action(self):
+        """Executa uma ação aleatória no jogo"""
+        if self.is_recording and self.csv_logger:
+            import random
+            actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
+            action = random.choice(actions)
+            self.add_marker(action)
+
     def add_marker(self, marker_type):
         """Adiciona um marcador durante a gravação"""
         if self.is_recording and self.csv_logger:
+            # Incrementar contador
+            if marker_type == "T1":
+                self.t1_counter += 1
+                self.t1_counter_label.setText(f"T1: {self.t1_counter}")
+                
+                # Enviar trigger apenas nos modos Teste e Treino
+                current_task = self.task_combo.currentText()
+                if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
+                    UDP_sender.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
+                    
+            elif marker_type == "T2":
+                self.t2_counter += 1
+                self.t2_counter_label.setText(f"T2: {self.t2_counter}")
+                
+                # Enviar trigger apenas nos modos Teste e Treino
+                current_task = self.task_combo.currentText()
+                if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
+                    UDP_sender.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
+
             if USE_OPENBCI_LOGGER:
                 # Para o logger OpenBCI, verificar se baseline está ativo
                 if hasattr(self.csv_logger, 'is_baseline_active'):
@@ -678,6 +806,157 @@ class StreamingWidget(QWidget):
         self.transitions_label.setText(f"Transições: {transitions}")
         self.confidence_label.setText(f"Confiança média: {avg_conf:.1f}%")
         
+    def process_accuracy_message(self, message):
+        """Processa mensagem UDP recebida para cálculo de acurácia"""
+        print(f"🔍 DEBUG: Mensagem recebida para acurácia: '{message}'")
+        
+        if not self.game_mode:
+            print("🔍 DEBUG: Ignorando mensagem - não está em modo jogo")
+            return
+            
+        try:
+            # Parse da mensagem: "RED_FLOWER,TRIGGER_ACTION_LEFT"
+            if "," in message:
+                parts = message.strip().split(",")
+                if len(parts) == 2:
+                    flower_color = parts[0].strip()
+                    trigger_action = parts[1].strip()
+                    
+                    # Mapear cor para ação esperada
+                    if flower_color == "RED_FLOWER":
+                        expected_action = "LEFT"  # Vermelho = esquerda esperada
+                    elif flower_color == "BLUE_FLOWER":
+                        expected_action = "RIGHT"  # Azul = direita esperada
+                    else:
+                        print(f"Cor de flor desconhecida: {flower_color}")
+                        return
+                    
+                    # Mapear trigger para ação real
+                    if trigger_action == "TRIGGER_ACTION_LEFT":
+                        real_action = "LEFT"
+                    elif trigger_action == "TRIGGER_ACTION_RIGHT":
+                        real_action = "RIGHT"
+                    else:
+                        print(f"Trigger desconhecido: {trigger_action}")
+                        return
+                    
+                    # Calcular se foi acerto
+                    is_correct = (expected_action == real_action)
+                    
+                    # Atualizar contadores
+                    self.accuracy_total += 1
+                    if is_correct:
+                        self.accuracy_correct += 1
+                    
+                    # Armazenar dados
+                    self.accuracy_data.append((expected_action, real_action, is_correct))
+                    
+                    # Atualizar interface
+                    self.update_accuracy_display()
+                    
+                    # Log para debug
+                    status = "✓" if is_correct else "✗"
+                    print(f"Acurácia: {flower_color} -> {expected_action} vs {trigger_action} -> {real_action} {status}")
+                    
+        except Exception as e:
+            print(f"Erro ao processar mensagem de acurácia: {e}")
+            
+    def update_accuracy_display(self):
+        """Atualiza a interface de acurácia"""
+        if self.accuracy_total == 0:
+            accuracy_percent = 0
+        else:
+            accuracy_percent = (self.accuracy_correct / self.accuracy_total) * 100
+            
+        # Atualizar label principal
+        self.accuracy_label.setText(f"Acurácia: {accuracy_percent:.1f}% ({self.accuracy_correct}/{self.accuracy_total})")
+        
+        # Atualizar detalhes
+        if self.accuracy_data:
+            last_trial = self.accuracy_data[-1]
+            expected, real, correct = last_trial
+            status = "✓ Correto" if correct else "✗ Erro"
+            self.accuracy_details_label.setText(f"Último: {expected} vs {real} - {status}")
+        
+        # Atualizar cor baseada na acurácia
+        if accuracy_percent >= 80:
+            color = "#4CAF50"  # Verde
+        elif accuracy_percent >= 60:
+            color = "#FF9800"  # Laranja
+        else:
+            color = "#f44336"  # Vermelho
+            
+        self.accuracy_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {color};")
+        
+    def reset_accuracy_data(self):
+        """Reseta os dados de acurácia"""
+        self.accuracy_data.clear()
+        self.accuracy_correct = 0
+        self.accuracy_total = 0
+        self.accuracy_label.setText("Acurácia: 0% (0/0)")
+        self.accuracy_details_label.setText("Esperado vs Real")
+        
+    def start_accuracy_udp_receiver(self):
+        """Inicia o UDP receiver para cálculo de acurácia usando thread"""
+        if self.accuracy_thread and self.accuracy_thread.is_alive():
+            return
+            
+        def udp_listener():
+            """Thread function para escutar mensagens UDP"""
+            print("🔍 DEBUG: Iniciando thread UDP listener para acurácia")
+            try:
+                # Primeiro, escuta o broadcast para obter o IP
+                print("🔍 DEBUG: Aguardando broadcast do IP...")
+                sender_ip = UDP_receiver.listen_for_broadcast()
+                if not sender_ip:
+                    print("❌ DEBUG: Não foi possível obter IP do sender para acurácia")
+                    return
+                
+                print(f"✅ DEBUG: IP obtido para acurácia: {sender_ip}")
+                
+                # Configura o socket ZMQ para receber as mensagens
+                context = zmq.Context()
+                socket = context.socket(zmq.SUB)
+                socket.connect(f"tcp://{sender_ip}:5556")
+                socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Recebe todas as mensagens
+                
+                # Configurar timeout para não bloquear
+                socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1 segundo de timeout
+                
+                print("✅ DEBUG: UDP receiver de acurácia conectado! Aguardando mensagens...")
+                
+                while self.game_mode and self.is_recording:
+                    try:
+                        # Recebe as mensagens
+                        message = socket.recv_string(zmq.NOBLOCK)
+                        print(f"📨 DEBUG: Mensagem recebida: '{message}'")
+                        # Emitir signal para processar na thread principal
+                        self.accuracy_message_signal.emit(message)
+                    except zmq.Again:
+                        # Timeout - continuar
+                        continue
+                    except Exception as e:
+                        print(f"❌ DEBUG: Erro ao receber mensagem de acurácia: {e}")
+                        break
+                        
+                print("Parando UDP receiver de acurácia...")
+                socket.close()
+                context.term()
+                
+            except Exception as e:
+                print(f"Erro no UDP receiver para acurácia: {e}")
+        
+        # Iniciar thread
+        self.accuracy_thread = threading.Thread(target=udp_listener, daemon=True)
+        self.accuracy_thread.start()
+        
+    def stop_accuracy_udp_receiver(self):
+        """Para o UDP receiver de acurácia"""
+        if self.accuracy_thread and self.accuracy_thread.is_alive():
+            # A thread vai parar automaticamente quando game_mode = False
+            self.accuracy_thread.join(timeout=2.0)
+            print("UDP receiver de acurácia parado")
+        
     def predict_movement(self, eeg_data):
         """Faz predição do movimento com o modelo CNN"""
         if not self.game_mode or self.model is None:
@@ -828,10 +1107,12 @@ class StreamingWidget(QWidget):
                         return
                 self.game_group.setVisible(True)
                 self.stats_group.setVisible(True)
+                self.accuracy_group.setVisible(True)  # Mostrar acurácia no jogo
             else:
                 self.record_btn.setText("Iniciar Gravação")
                 self.game_group.setVisible(False)
                 self.stats_group.setVisible(False)
+                self.accuracy_group.setVisible(False)  # Esconder acurácia fora do jogo
     
     def update_record_button_text(self):
         """Atualiza o texto do botão de gravação baseado no estado e tarefa"""

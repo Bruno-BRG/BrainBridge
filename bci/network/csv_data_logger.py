@@ -5,7 +5,7 @@ import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import logging
-from .udp_receiver import UDPReceiver
+from .udp_receiver_BCI import UDPReceiver_BCI
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -38,7 +38,7 @@ class CSVDataLogger:
         self.csv_filepath = os.path.join(os.getcwd(), self.csv_filename)
         
         # Receptor UDP
-        self.udp_receiver = UDPReceiver(host=host, port=port)
+        self.udp_receiver = UDPReceiver_BCI(host=host, port=port)
         
         # Configurações para tempo real
         self.is_logging = False

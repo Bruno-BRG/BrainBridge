@@ -22,7 +22,7 @@ class UDP:
     def send_ip_UPD(ip):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        broadcast_port = 12346
+        broadcast_port = 12347
         try:
             sock.sendto(ip.encode(), ('<broadcast>', broadcast_port))
             print(f"Broadcast enviado: {ip}")
@@ -32,13 +32,13 @@ class UDP:
             sock.close()
 
     @classmethod
-    def enviar_sinal(cls, lado):
+    def enviar_sinal(cls, action):
         if cls.zmq_socket is None:
             print("Erro: Socket ZMQ não foi inicializado. Chame init_zmq_socket() primeiro.")
             return False
             
         try:
-            if lado.lower() == 'direita':
+            if action.lower() == 'direita':
                 cls.zmq_socket.send_string("RIGHT_HAND_CLOSE")
                 # Enviar comando de abrir após um pequeno delay (sem bloquear)
                 import threading
@@ -49,7 +49,7 @@ class UDP:
                 threading.Thread(target=send_open, daemon=True).start()
                 print("Sinal mão direita enviado")
                 return True
-            elif lado.lower() == 'esquerda':
+            elif action.lower() == 'esquerda':
                 cls.zmq_socket.send_string("LEFT_HAND_CLOSE")
                 # Enviar comando de abrir após um pequeno delay (sem bloquear)
                 import threading
@@ -60,8 +60,62 @@ class UDP:
                 threading.Thread(target=send_open, daemon=True).start()
                 print("Sinal mão esquerda enviado")
                 return True
+            elif action.lower() == 'trigger_right':
+                import threading
+                def send_trigger():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("TRIGGER_RIGHT")
+                threading.Thread(target=send_trigger, daemon=True).start()
+                print("Sinal de gatilho mão direita enviado")
+                return True
+            elif action.lower() == 'trigger_left':
+                import threading
+                def send_trigger():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("TRIGGER_LEFT")
+                threading.Thread(target=send_trigger, daemon=True).start()
+                print("Sinal de gatilho mão esquerda enviado")
+                return True
+            elif action.lower() == 'redleft':
+                import threading
+                def send_redleft():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("RED_FLOWER,TRIGGER_ACTION_LEFT")
+                threading.Thread(target=send_redleft, daemon=True).start()
+                print("Sinal de flor vermelha mão esquerda enviado")
+                return True
+            elif action.lower() == 'redright':
+                import threading
+                def send_redright():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("RED_FLOWER,TRIGGER_ACTION_RIGHT")
+                threading.Thread(target=send_redright, daemon=True).start()
+                print("Sinal de flor vermelha mão direita enviado")
+                return True
+            elif action.lower() == 'blueleft':
+                import threading
+                def send_blueleft():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("BLUE_FLOWER,TRIGGER_ACTION_LEFT")
+                threading.Thread(target=send_blueleft, daemon=True).start()
+                print("Sinal de flor azul mão esquerda enviado")
+                return True
+            elif action.lower() == 'blueright':
+                import threading
+                def send_blueright():
+                    time.sleep(0.1)
+                    if cls.zmq_socket is not None:
+                        cls.zmq_socket.send_string("BLUE_FLOWER,TRIGGER_ACTION_RIGHT")
+                threading.Thread(target=send_blueright, daemon=True).start()
+                print("Sinal de flor azul mão direita enviado")
+                return True
             else:
-                print("Entrada inválida. Use 'direita' ou 'esquerda'")
+                print("Entrada inválida.")
                 return False
         except Exception as e:
             print(f"Erro ao enviar sinal: {e}")
@@ -77,9 +131,9 @@ class UDP:
         try:
             context = zmq.Context()
             cls.zmq_socket = context.socket(zmq.PUB)
-            cls.zmq_socket.bind("tcp://*:5555")
-            print("Socket ZMQ inicializado na porta 5555")
-            
+            cls.zmq_socket.bind("tcp://*:5556")
+            print("Socket ZMQ inicializado na porta 5556")
+
             # Enviar broadcast do IP automaticamente
             local_ip = cls.get_local_ip()
             print(f"IP Local detectado: {local_ip}")

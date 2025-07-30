@@ -4,9 +4,10 @@ Network Module - Módulos de rede e comunicação UDP
 Este módulo contém classes para captura e processamento de dados via UDP.
 """
 
-from .udp_receiver import UDPReceiver
+from .udp_receiver_BCI import UDPReceiver_BCI
 from .csv_data_logger import CSVDataLogger
-from .UDP import UDP
+from .UDP_sender import UDP_sender
+from .udp_receiver import UDP_receiver
 
 # Imports opcionais para outros módulos
 try:
@@ -25,7 +26,8 @@ except ImportError:
     pass
 
 __all__ = [
-    'UDPReceiver',
+    'UDPReceiver_BCI',
     'CSVDataLogger',
-    'UDP'
+    'UDP_sender',
+    'UDP_receiver'
 ]
