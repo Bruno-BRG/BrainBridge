@@ -18,7 +18,7 @@ from ..streaming_logic.streaming_thread import StreamingThread
 from ..configs.config import get_recording_path
 from .EEG_plot_widget import EEGPlotWidget
 from ..AI.EEGNet import EEGNet
-from ..network.UDP_sender import UDP_sender
+from ..network.unity_communication import UDP_sender, UDP_receiver, UnityCommunicator
 
 # Importar loggers
 try:
@@ -31,12 +31,6 @@ try:
     from ..network.simple_csv_logger import SimpleCSVLogger
 except ImportError:
     SimpleCSVLogger = None
-
-# Importar UDP_receiver existente
-try:
-    from ..network.udp_receiver import UDP_receiver
-except ImportError:
-    UDP_receiver = None
 
 class StreamingWidget(QWidget):
     """Widget para streaming e gravação de dados"""
@@ -74,6 +68,11 @@ class StreamingWidget(QWidget):
         self.udp_server_active = False
         self.game_mode = False
         self.game_mode = False  # Flag para modo jogo
+        
+        # Inicializar comunicador Unity
+        self.unity_communicator = UnityCommunicator()
+        self.unity_communicator.set_message_callback(self._on_unity_message)
+        self.unity_communicator.set_connection_callback(self._on_unity_connection)
         
         # Contadores para marcadores
         self.t1_counter = 0
@@ -409,24 +408,26 @@ class StreamingWidget(QWidget):
         if not self.udp_server_active:
             # Iniciar servidor UDP
             try:
-                UDP_sender.init_zmq_socket()  # Agora já envia o broadcast automaticamente
-                self.udp_server_active = True
-                self.udp_status_label.setText("Servidor UDP: Ligado")
-                self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
-                self.udp_toggle_btn.setText("Parar Servidor UDP")
-                self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
-                
-                # Habilitar botões de teste
-                self.udp_test_left_btn.setEnabled(True)
-                self.udp_test_right_btn.setEnabled(True)
-                
-                QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+                if self.unity_communicator.start_server():
+                    self.udp_server_active = True
+                    self.udp_status_label.setText("Servidor UDP: Ligado")
+                    self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
+                    self.udp_toggle_btn.setText("Parar Servidor UDP")
+                    self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+                    
+                    # Habilitar botões de teste
+                    self.udp_test_left_btn.setEnabled(True)
+                    self.udp_test_right_btn.setEnabled(True)
+                    
+                    QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+                else:
+                    QMessageBox.critical(self, "Erro", "Falha ao iniciar servidor UDP")
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Erro ao iniciar servidor UDP: {e}")
         else:
             # Parar servidor UDP
             try:
-                UDP_sender.stop_zmq_socket()  # Usar o novo método para parar
+                self.unity_communicator.stop_server()
                 self.udp_server_active = False
                 self.udp_status_label.setText("Servidor UDP: Desligado")
                 self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
@@ -493,14 +494,11 @@ class StreamingWidget(QWidget):
                 # Resetar dados de acurácia
                 self.reset_accuracy_data()
                 
-                # Iniciar UDP receiver para acurácia
-                if UDP_receiver:
-                    try:
-                        self.start_accuracy_udp_receiver()
-                    except Exception as e:
-                        print(f"Erro ao iniciar UDP receiver de acurácia: {e}")
-                else:
-                    print("UDP_receiver não disponível para acurácia")
+                # Iniciar UDP receiver para acurácia - agora sempre disponível
+                try:
+                    self.start_accuracy_udp_receiver()
+                except Exception as e:
+                    print(f"Erro ao iniciar UDP receiver de acurácia: {e}")
                 
                 # Iniciar timer para ações automáticas no jogo (a cada 3 segundos)
                 self.game_action_timer.start(3000)
@@ -897,65 +895,17 @@ class StreamingWidget(QWidget):
         self.accuracy_details_label.setText("Esperado vs Real")
         
     def start_accuracy_udp_receiver(self):
-        """Inicia o UDP receiver para cálculo de acurácia usando thread"""
-        if self.accuracy_thread and self.accuracy_thread.is_alive():
-            return
-            
-        def udp_listener():
-            """Thread function para escutar mensagens UDP"""
-            print("🔍 DEBUG: Iniciando thread UDP listener para acurácia")
-            try:
-                # Primeiro, escuta o broadcast para obter o IP
-                print("🔍 DEBUG: Aguardando broadcast do IP...")
-                sender_ip = UDP_receiver.listen_for_broadcast()
-                if not sender_ip:
-                    print("❌ DEBUG: Não foi possível obter IP do sender para acurácia")
-                    return
-                
-                print(f"✅ DEBUG: IP obtido para acurácia: {sender_ip}")
-                
-                # Configura o socket ZMQ para receber as mensagens
-                context = zmq.Context()
-                socket = context.socket(zmq.SUB)
-                socket.connect(f"tcp://{sender_ip}:5556")
-                socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Recebe todas as mensagens
-                
-                # Configurar timeout para não bloquear
-                socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1 segundo de timeout
-                
-                print("✅ DEBUG: UDP receiver de acurácia conectado! Aguardando mensagens...")
-                
-                while self.game_mode and self.is_recording:
-                    try:
-                        # Recebe as mensagens
-                        message = socket.recv_string(zmq.NOBLOCK)
-                        print(f"📨 DEBUG: Mensagem recebida: '{message}'")
-                        # Emitir signal para processar na thread principal
-                        self.accuracy_message_signal.emit(message)
-                    except zmq.Again:
-                        # Timeout - continuar
-                        continue
-                    except Exception as e:
-                        print(f"❌ DEBUG: Erro ao receber mensagem de acurácia: {e}")
-                        break
-                        
-                print("Parando UDP receiver de acurácia...")
-                socket.close()
-                context.term()
-                
-            except Exception as e:
-                print(f"Erro no UDP receiver para acurácia: {e}")
-        
-        # Iniciar thread
-        self.accuracy_thread = threading.Thread(target=udp_listener, daemon=True)
-        self.accuracy_thread.start()
+        """
+        Inicia o receptor de acurácia.
+        Agora usa o sistema de callbacks do UnityCommunicator.
+        """
+        print("✅ Sistema de acurácia ativo - usando callbacks do UnityCommunicator")
+        # O receptor de mensagens já está ativo através dos callbacks do unity_communicator
+        # As mensagens serão processadas automaticamente via _on_unity_message()
         
     def stop_accuracy_udp_receiver(self):
         """Para o UDP receiver de acurácia"""
-        if self.accuracy_thread and self.accuracy_thread.is_alive():
-            # A thread vai parar automaticamente quando game_mode = False
-            self.accuracy_thread.join(timeout=2.0)
-            print("UDP receiver de acurácia parado")
+        print("Sistema de acurácia parado - callbacks mantidos ativos")
         
     def predict_movement(self, eeg_data):
         """Faz predição do movimento com o modelo CNN"""
@@ -1128,3 +1078,25 @@ class StreamingWidget(QWidget):
                 self.record_btn.setText("Iniciar Jogo")
             else:
                 self.record_btn.setText("Iniciar Gravação")
+    
+    def _on_unity_message(self, message: str):
+        """Callback para mensagens recebidas do Unity"""
+        print(f"[Unity] Mensagem recebida: {message}")
+        
+        # Processar mensagens específicas do Unity
+        if "FLOWER" in message:
+            # Usar o signal existente para processar mensagens de acurácia
+            self.accuracy_message_signal.emit(message)
+        elif "CONNECTED" in message:
+            print("[Unity] Confirmação de conexão recebida")
+        elif "STATUS" in message:
+            print(f"[Unity] Status: {message}")
+    
+    def _on_unity_connection(self, connected: bool):
+        """Callback para mudanças no status de conexão com Unity"""
+        if connected:
+            print("[Unity] TCP conectado")
+            # Aqui você pode atualizar a UI para mostrar que o Unity está conectado
+        else:
+            print("[Unity] TCP desconectado")
+            # Aqui você pode atualizar a UI para mostrar que o Unity foi desconectado
