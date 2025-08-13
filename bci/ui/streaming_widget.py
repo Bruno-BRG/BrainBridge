@@ -86,6 +86,11 @@ class StreamingWidget(QWidget):
         self.waiting_for_response = False
         self.response_received = False
         
+        # Controle de janela de tempo para IA (5 segundos de previsão permitida)
+        self.ai_prediction_enabled = False
+        self.task_start_time = None
+        self.ai_window_duration = 5000  # 5 segundos em ms
+        
         # Variáveis para cálculo de acurácia
         self.accuracy_data = []  # Lista de tuplas (cor_esperada, trigger_real)
         self.accuracy_correct = 0
@@ -312,6 +317,12 @@ class StreamingWidget(QWidget):
         self.prob_right_label.setStyleSheet("color: #FF9800;")
         game_layout.addWidget(self.prob_left_label)
         game_layout.addWidget(self.prob_right_label)
+        
+        # Label para status da janela de IA
+        self.ai_status_label = QLabel("🤖 IA: Aguardando tarefa")
+        self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+        self.ai_status_label.setAlignment(Qt.AlignCenter)
+        game_layout.addWidget(self.ai_status_label)
 
         game_group.setLayout(game_layout)
         layout.addWidget(game_group)
@@ -502,6 +513,14 @@ class StreamingWidget(QWidget):
                 self.waiting_for_response = False
                 self.response_received = False
                 
+                # Resetar controle de IA
+                self.ai_prediction_enabled = False
+                self.task_start_time = None
+                
+                # Resetar status visual da IA
+                self.ai_status_label.setText("🤖 IA: Aguardando tarefa")
+                self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+                
                 # Resetar contadores de ações no início da gravação
                 self.reset_action_counters()
                 
@@ -582,6 +601,14 @@ class StreamingWidget(QWidget):
             self.waiting_for_response = False
             self.response_received = False
             
+            # Resetar controle de IA
+            self.ai_prediction_enabled = False
+            self.task_start_time = None
+            
+            # Resetar status visual da IA
+            self.ai_status_label.setText("🤖 IA: Parada")
+            self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+            
             # Resetar contadores de ações
             self.reset_action_counters()
                 
@@ -625,6 +652,18 @@ class StreamingWidget(QWidget):
             self.waiting_for_response = True
             self.response_received = False
             
+            # Abrir janela de IA por 5 segundos (fallback)
+            self.ai_prediction_enabled = True
+            self.task_start_time = time.time() * 1000  # timestamp em ms
+            print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s (fallback)")
+            
+            # Atualizar status visual
+            self.ai_status_label.setText("🟡 IA: Ativa (fallback)")
+            self.ai_status_label.setStyleSheet("color: orange; font-weight: bold; font-size: 12px;")
+            
+            # Fechar automaticamente a janela após 5 segundos
+            QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
+            
             self.add_marker(action)
 
     def send_next_random_signal(self):
@@ -639,7 +678,28 @@ class StreamingWidget(QWidget):
             self.waiting_for_response = True
             self.response_received = False
             
+            # Abrir janela de IA por 5 segundos
+            self.ai_prediction_enabled = True
+            self.task_start_time = time.time() * 1000  # timestamp em ms
+            print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s")
+            
+            # Atualizar status visual
+            self.ai_status_label.setText("🟢 IA: Ativa (5s)")
+            self.ai_status_label.setStyleSheet("color: green; font-weight: bold; font-size: 12px;")
+            
+            # Fechar automaticamente a janela após 5 segundos
+            QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
+            
             self.add_marker(action)
+
+    def close_ai_window(self):
+        """Fecha a janela de IA após 5 segundos"""
+        self.ai_prediction_enabled = False
+        print("🚫 Janela de IA fechada automaticamente")
+        
+        # Atualizar status visual
+        self.ai_status_label.setText("🔴 IA: Inativa")
+        self.ai_status_label.setStyleSheet("color: red; font-weight: bold; font-size: 12px;")
 
     def add_marker(self, marker_type):
         """Adiciona um marcador durante a gravação"""
@@ -964,6 +1024,18 @@ class StreamingWidget(QWidget):
         """Faz predição do movimento com o modelo CNN"""
         if not self.game_mode or self.model is None:
             return
+        
+        # Verificar se a IA pode fazer previsões (janela de 5 segundos)
+        if not self.ai_prediction_enabled:
+            return
+            
+        # Verificar se ainda está dentro da janela de tempo permitida
+        if self.task_start_time is not None:
+            elapsed_time = time.time() * 1000 - self.task_start_time  # em ms
+            if elapsed_time > self.ai_window_duration:
+                self.ai_prediction_enabled = False
+                print(f"🚫 Janela de IA fechada após {self.ai_window_duration/1000}s")
+                return
             
         try:
             # Normalização por canal
