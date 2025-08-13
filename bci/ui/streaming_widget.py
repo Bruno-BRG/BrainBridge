@@ -82,6 +82,10 @@ class StreamingWidget(QWidget):
         self.game_action_timer = QTimer()
         self.game_action_timer.timeout.connect(self.game_random_action)
         
+        # Controle para aguardar resposta antes do próximo sinal
+        self.waiting_for_response = False
+        self.response_received = False
+        
         # Variáveis para cálculo de acurácia
         self.accuracy_data = []  # Lista de tuplas (cor_esperada, trigger_real)
         self.accuracy_correct = 0
@@ -494,14 +498,22 @@ class StreamingWidget(QWidget):
                 # Resetar dados de acurácia
                 self.reset_accuracy_data()
                 
+                # Resetar controle de resposta
+                self.waiting_for_response = False
+                self.response_received = False
+                
                 # Iniciar UDP receiver para acurácia - agora sempre disponível
                 try:
                     self.start_accuracy_udp_receiver()
                 except Exception as e:
                     print(f"Erro ao iniciar UDP receiver de acurácia: {e}")
                 
-                # Iniciar timer para ações automáticas no jogo (a cada 3 segundos)
-                self.game_action_timer.start(3000)
+                # Iniciar primeiro sinal aleatório imediatamente (não usar timer automático)
+                # O próximo sinal será enviado apenas após receber CORRECT/WRONG
+                QTimer.singleShot(1000, self.send_next_random_signal)  # Aguardar 1 segundo para inicializar
+                
+                # Manter timer como fallback caso não receba resposta (a cada 30 segundos)
+                self.game_action_timer.start(30000)
             
             try:
                 # Usar logger OpenBCI se disponível
@@ -565,6 +577,10 @@ class StreamingWidget(QWidget):
             # Parar timer de ações automáticas no jogo
             if self.game_action_timer.isActive():
                 self.game_action_timer.stop()
+            
+            # Resetar controle de resposta
+            self.waiting_for_response = False
+            self.response_received = False
                 
             self.update_record_button_text()  # Usar método que considera a tarefa
             self.recording_label.setText("Não gravando")
@@ -589,11 +605,37 @@ class StreamingWidget(QWidget):
     
 
     def game_random_action(self):
-        """Executa uma ação aleatória no jogo"""
+        """Executa uma ação aleatória no jogo (fallback caso não receba resposta)"""
         if self.is_recording and self.csv_logger:
+            # Verificar se não está aguardando resposta
+            if self.waiting_for_response:
+                print("⚠️  Timeout: Não recebeu resposta CORRECT/WRONG, enviando sinal de fallback")
+                # Resetar estado e enviar novo sinal
+                self.waiting_for_response = False
+                self.response_received = False
+                
             import random
             actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
             action = random.choice(actions)
+            
+            # Marcar que está aguardando resposta
+            self.waiting_for_response = True
+            self.response_received = False
+            
+            self.add_marker(action)
+
+    def send_next_random_signal(self):
+        """Envia o próximo sinal aleatório após receber resposta"""
+        if self.is_recording and self.csv_logger:
+            print("🎲 Enviando próximo sinal aleatório")
+            import random
+            actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
+            action = random.choice(actions)
+            
+            # Marcar que está aguardando resposta
+            self.waiting_for_response = True
+            self.response_received = False
+            
             self.add_marker(action)
 
     def add_marker(self, marker_type):
@@ -1082,6 +1124,16 @@ class StreamingWidget(QWidget):
     def _on_unity_message(self, message: str):
         """Callback para mensagens recebidas do Unity"""
         print(f"[Unity] Mensagem recebida: {message}")
+        
+        # Verificar se recebeu resposta CORRECT ou WRONG
+        if "CORRECT" in message or "WRONG" in message:
+            print(f"✅ Resposta recebida: {message}")
+            if self.waiting_for_response:
+                self.waiting_for_response = False
+                self.response_received = True
+                print("🔓 Liberado para enviar próximo sinal aleatório")
+                # Aguardar 7 segundos antes do próximo sinal
+                QTimer.singleShot(7000, self.send_next_random_signal)
         
         # Processar mensagens específicas do Unity
         if "FLOWER" in message:

@@ -7,10 +7,15 @@ import time
 import sys
 import os
 
-# Adicionar o diretório pai ao path para importar o módulo
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Adicionar o diretório atual ao path para importar o módulo
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from bci.network.unity_communication import UnityCommunicator, UDP_sender, UDP_receiver
+try:
+    from bci.network.unity_communication import UnityCommunicator, UDP_sender, UDP_receiver
+    print("✅ Importação do sistema unificado bem-sucedida")
+except ImportError as e:
+    print(f"❌ Erro na importação: {e}")
+    sys.exit(1)
 
 def test_compatibility():
     """Testa a compatibilidade com as classes antigas"""
