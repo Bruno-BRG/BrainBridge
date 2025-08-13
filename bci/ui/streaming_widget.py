@@ -502,6 +502,9 @@ class StreamingWidget(QWidget):
                 self.waiting_for_response = False
                 self.response_received = False
                 
+                # Resetar contadores de ações no início da gravação
+                self.reset_action_counters()
+                
                 # Iniciar UDP receiver para acurácia - agora sempre disponível
                 try:
                     self.start_accuracy_udp_receiver()
@@ -547,10 +550,7 @@ class StreamingWidget(QWidget):
                 self.baseline_btn.setEnabled(True)
                 
                 # Resetar contadores
-                self.t1_counter = 0
-                self.t2_counter = 0
-                self.t1_counter_label.setText("T1: 0")
-                self.t2_counter_label.setText("T2: 0")
+                self.reset_action_counters()
                 
                 # Registrar gravação no banco
                 recording_path = display_path if USE_OPENBCI_LOGGER else filename
@@ -581,6 +581,9 @@ class StreamingWidget(QWidget):
             # Resetar controle de resposta
             self.waiting_for_response = False
             self.response_received = False
+            
+            # Resetar contadores de ações
+            self.reset_action_counters()
                 
             self.update_record_button_text()  # Usar método que considera a tarefa
             self.recording_label.setText("Não gravando")
@@ -935,6 +938,14 @@ class StreamingWidget(QWidget):
         self.accuracy_total = 0
         self.accuracy_label.setText("Acurácia: 0% (0/0)")
         self.accuracy_details_label.setText("Esperado vs Real")
+    
+    def reset_action_counters(self):
+        """Reseta os contadores de ações T1 e T2"""
+        self.t1_counter = 0
+        self.t2_counter = 0
+        self.t1_counter_label.setText("T1: 0")
+        self.t2_counter_label.setText("T2: 0")
+        print("🔄 Contadores de ações resetados")
         
     def start_accuracy_udp_receiver(self):
         """
