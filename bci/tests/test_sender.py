@@ -118,7 +118,7 @@ class UDP:
                 def send_blueleft():
                     time.sleep(0.1)
                     if cls.zmq_socket is not None:
-                        cls.zmq_socket.send_string("BLUE_FLOWER,TRIGGER_ACTION_LEFT")
+                        cls.zmq_socket.send_string("BLUE_FLOWER, WRONG")
                 threading.Thread(target=send_blueleft, daemon=True).start()
                 print("Sinal de flor azul mão esquerda enviado")
                 return True
@@ -127,7 +127,7 @@ class UDP:
                 def send_blueright():
                     time.sleep(0.1)
                     if cls.zmq_socket is not None:
-                        cls.zmq_socket.send_string("BLUE_FLOWER,TRIGGER_ACTION_RIGHT")
+                        cls.zmq_socket.send_string("BLUE_FLOWER,CORRECT")
                 threading.Thread(target=send_blueright, daemon=True).start()
                 print("Sinal de flor azul mão direita enviado")
                 return True
@@ -223,8 +223,8 @@ class UDP:
         print("  - trigger_left  : Gatilho mão esquerda")
         print("  - redleft       : Flor vermelha mão esquerda (CORRECT)")
         print("  - redright      : Flor vermelha mão direita (WRONG)")
-        print("  - blueleft      : Flor azul mão esquerda (TRIGGER_ACTION_LEFT)")
-        print("  - blueright     : Flor azul mão direita (TRIGGER_ACTION_RIGHT)")
+        print("  - blueleft      : Flor azul mão esquerda (WRONG)")
+        print("  - blueright     : Flor azul mão direita (CORRECT)")
         print("  - sair          : Encerra o programa")
         print("="*60)
         
