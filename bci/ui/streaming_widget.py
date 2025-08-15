@@ -18,7 +18,7 @@ from ..streaming_logic.streaming_thread import StreamingThread
 from ..configs.config import get_recording_path
 from .EEG_plot_widget import EEGPlotWidget
 from ..AI.EEGNet import EEGNet
-from ..network.UDP_sender import UDP_sender
+from ..network.unity_communication import UDP_sender, UDP_receiver, UnityCommunicator
 
 # Importar loggers
 try:
@@ -31,12 +31,6 @@ try:
     from ..network.simple_csv_logger import SimpleCSVLogger
 except ImportError:
     SimpleCSVLogger = None
-
-# Importar UDP_receiver existente
-try:
-    from ..network.udp_receiver import UDP_receiver
-except ImportError:
-    UDP_receiver = None
 
 class StreamingWidget(QWidget):
     """Widget para streaming e gravação de dados"""
@@ -75,6 +69,11 @@ class StreamingWidget(QWidget):
         self.game_mode = False
         self.game_mode = False  # Flag para modo jogo
         
+        # Inicializar comunicador Unity
+        self.unity_communicator = UnityCommunicator()
+        self.unity_communicator.set_message_callback(self._on_unity_message)
+        self.unity_communicator.set_connection_callback(self._on_unity_connection)
+        
         # Contadores para marcadores
         self.t1_counter = 0
         self.t2_counter = 0
@@ -82,6 +81,15 @@ class StreamingWidget(QWidget):
         # Timer para ações automáticas no jogo
         self.game_action_timer = QTimer()
         self.game_action_timer.timeout.connect(self.game_random_action)
+        
+        # Controle para aguardar resposta antes do próximo sinal
+        self.waiting_for_response = False
+        self.response_received = False
+        
+        # Controle de janela de tempo para IA (5 segundos de previsão permitida)
+        self.ai_prediction_enabled = False
+        self.task_start_time = None
+        self.ai_window_duration = 5000  # 5 segundos em ms
         
         # Variáveis para cálculo de acurácia
         self.accuracy_data = []  # Lista de tuplas (cor_esperada, trigger_real)
@@ -309,6 +317,12 @@ class StreamingWidget(QWidget):
         self.prob_right_label.setStyleSheet("color: #FF9800;")
         game_layout.addWidget(self.prob_left_label)
         game_layout.addWidget(self.prob_right_label)
+        
+        # Label para status da janela de IA
+        self.ai_status_label = QLabel("🤖 IA: Aguardando tarefa")
+        self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+        self.ai_status_label.setAlignment(Qt.AlignCenter)
+        game_layout.addWidget(self.ai_status_label)
 
         game_group.setLayout(game_layout)
         layout.addWidget(game_group)
@@ -409,24 +423,26 @@ class StreamingWidget(QWidget):
         if not self.udp_server_active:
             # Iniciar servidor UDP
             try:
-                UDP_sender.init_zmq_socket()  # Agora já envia o broadcast automaticamente
-                self.udp_server_active = True
-                self.udp_status_label.setText("Servidor UDP: Ligado")
-                self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
-                self.udp_toggle_btn.setText("Parar Servidor UDP")
-                self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
-                
-                # Habilitar botões de teste
-                self.udp_test_left_btn.setEnabled(True)
-                self.udp_test_right_btn.setEnabled(True)
-                
-                QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+                if self.unity_communicator.start_server():
+                    self.udp_server_active = True
+                    self.udp_status_label.setText("Servidor UDP: Ligado")
+                    self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
+                    self.udp_toggle_btn.setText("Parar Servidor UDP")
+                    self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+                    
+                    # Habilitar botões de teste
+                    self.udp_test_left_btn.setEnabled(True)
+                    self.udp_test_right_btn.setEnabled(True)
+                    
+                    QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+                else:
+                    QMessageBox.critical(self, "Erro", "Falha ao iniciar servidor UDP")
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Erro ao iniciar servidor UDP: {e}")
         else:
             # Parar servidor UDP
             try:
-                UDP_sender.stop_zmq_socket()  # Usar o novo método para parar
+                self.unity_communicator.stop_server()
                 self.udp_server_active = False
                 self.udp_status_label.setText("Servidor UDP: Desligado")
                 self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
@@ -493,17 +509,33 @@ class StreamingWidget(QWidget):
                 # Resetar dados de acurácia
                 self.reset_accuracy_data()
                 
-                # Iniciar UDP receiver para acurácia
-                if UDP_receiver:
-                    try:
-                        self.start_accuracy_udp_receiver()
-                    except Exception as e:
-                        print(f"Erro ao iniciar UDP receiver de acurácia: {e}")
-                else:
-                    print("UDP_receiver não disponível para acurácia")
+                # Resetar controle de resposta
+                self.waiting_for_response = False
+                self.response_received = False
                 
-                # Iniciar timer para ações automáticas no jogo (a cada 3 segundos)
-                self.game_action_timer.start(3000)
+                # Resetar controle de IA
+                self.ai_prediction_enabled = False
+                self.task_start_time = None
+                
+                # Resetar status visual da IA
+                self.ai_status_label.setText("🤖 IA: Aguardando tarefa")
+                self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+                
+                # Resetar contadores de ações no início da gravação
+                self.reset_action_counters()
+                
+                # Iniciar UDP receiver para acurácia - agora sempre disponível
+                try:
+                    self.start_accuracy_udp_receiver()
+                except Exception as e:
+                    print(f"Erro ao iniciar UDP receiver de acurácia: {e}")
+                
+                # Iniciar primeiro sinal aleatório imediatamente (não usar timer automático)
+                # O próximo sinal será enviado apenas após receber CORRECT/WRONG
+                QTimer.singleShot(1000, self.send_next_random_signal)  # Aguardar 1 segundo para inicializar
+                
+                # Manter timer como fallback caso não receba resposta (a cada 30 segundos)
+                self.game_action_timer.start(30000)
             
             try:
                 # Usar logger OpenBCI se disponível
@@ -537,10 +569,7 @@ class StreamingWidget(QWidget):
                 self.baseline_btn.setEnabled(True)
                 
                 # Resetar contadores
-                self.t1_counter = 0
-                self.t2_counter = 0
-                self.t1_counter_label.setText("T1: 0")
-                self.t2_counter_label.setText("T2: 0")
+                self.reset_action_counters()
                 
                 # Registrar gravação no banco
                 recording_path = display_path if USE_OPENBCI_LOGGER else filename
@@ -567,6 +596,21 @@ class StreamingWidget(QWidget):
             # Parar timer de ações automáticas no jogo
             if self.game_action_timer.isActive():
                 self.game_action_timer.stop()
+            
+            # Resetar controle de resposta
+            self.waiting_for_response = False
+            self.response_received = False
+            
+            # Resetar controle de IA
+            self.ai_prediction_enabled = False
+            self.task_start_time = None
+            
+            # Resetar status visual da IA
+            self.ai_status_label.setText("🤖 IA: Parada")
+            self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+            
+            # Resetar contadores de ações
+            self.reset_action_counters()
                 
             self.update_record_button_text()  # Usar método que considera a tarefa
             self.recording_label.setText("Não gravando")
@@ -591,12 +635,71 @@ class StreamingWidget(QWidget):
     
 
     def game_random_action(self):
-        """Executa uma ação aleatória no jogo"""
+        """Executa uma ação aleatória no jogo (fallback caso não receba resposta)"""
         if self.is_recording and self.csv_logger:
+            # Verificar se não está aguardando resposta
+            if self.waiting_for_response:
+                print("⚠️  Timeout: Não recebeu resposta CORRECT/WRONG, enviando sinal de fallback")
+                # Resetar estado e enviar novo sinal
+                self.waiting_for_response = False
+                self.response_received = False
+                
             import random
             actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
             action = random.choice(actions)
+            
+            # Marcar que está aguardando resposta
+            self.waiting_for_response = True
+            self.response_received = False
+            
+            # Abrir janela de IA por 5 segundos (fallback)
+            self.ai_prediction_enabled = True
+            self.task_start_time = time.time() * 1000  # timestamp em ms
+            print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s (fallback)")
+            
+            # Atualizar status visual
+            self.ai_status_label.setText("🟡 IA: Ativa (fallback)")
+            self.ai_status_label.setStyleSheet("color: orange; font-weight: bold; font-size: 12px;")
+            
+            # Fechar automaticamente a janela após 5 segundos
+            QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
+            
             self.add_marker(action)
+
+    def send_next_random_signal(self):
+        """Envia o próximo sinal aleatório após receber resposta"""
+        if self.is_recording and self.csv_logger:
+            print("🎲 Enviando próximo sinal aleatório")
+            import random
+            actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
+            action = random.choice(actions)
+            
+            # Marcar que está aguardando resposta
+            self.waiting_for_response = True
+            self.response_received = False
+            
+            # Abrir janela de IA por 5 segundos
+            self.ai_prediction_enabled = True
+            self.task_start_time = time.time() * 1000  # timestamp em ms
+            print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s")
+            
+            # Atualizar status visual
+            self.ai_status_label.setText("🟢 IA: Ativa (5s)")
+            self.ai_status_label.setStyleSheet("color: green; font-weight: bold; font-size: 12px;")
+            
+            # Fechar automaticamente a janela após 5 segundos
+            QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
+            
+            self.add_marker(action)
+
+    def close_ai_window(self):
+        """Fecha a janela de IA após 5 segundos"""
+        self.ai_prediction_enabled = False
+        print("🚫 Janela de IA fechada automaticamente")
+        
+        # Atualizar status visual
+        self.ai_status_label.setText("🔴 IA: Inativa")
+        self.ai_status_label.setStyleSheet("color: red; font-weight: bold; font-size: 12px;")
 
     def add_marker(self, marker_type):
         """Adiciona um marcador durante a gravação"""
@@ -895,72 +998,44 @@ class StreamingWidget(QWidget):
         self.accuracy_total = 0
         self.accuracy_label.setText("Acurácia: 0% (0/0)")
         self.accuracy_details_label.setText("Esperado vs Real")
+    
+    def reset_action_counters(self):
+        """Reseta os contadores de ações T1 e T2"""
+        self.t1_counter = 0
+        self.t2_counter = 0
+        self.t1_counter_label.setText("T1: 0")
+        self.t2_counter_label.setText("T2: 0")
+        print("🔄 Contadores de ações resetados")
         
     def start_accuracy_udp_receiver(self):
-        """Inicia o UDP receiver para cálculo de acurácia usando thread"""
-        if self.accuracy_thread and self.accuracy_thread.is_alive():
-            return
-            
-        def udp_listener():
-            """Thread function para escutar mensagens UDP"""
-            print("🔍 DEBUG: Iniciando thread UDP listener para acurácia")
-            try:
-                # Primeiro, escuta o broadcast para obter o IP
-                print("🔍 DEBUG: Aguardando broadcast do IP...")
-                sender_ip = UDP_receiver.listen_for_broadcast()
-                if not sender_ip:
-                    print("❌ DEBUG: Não foi possível obter IP do sender para acurácia")
-                    return
-                
-                print(f"✅ DEBUG: IP obtido para acurácia: {sender_ip}")
-                
-                # Configura o socket ZMQ para receber as mensagens
-                context = zmq.Context()
-                socket = context.socket(zmq.SUB)
-                socket.connect(f"tcp://{sender_ip}:5556")
-                socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Recebe todas as mensagens
-                
-                # Configurar timeout para não bloquear
-                socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1 segundo de timeout
-                
-                print("✅ DEBUG: UDP receiver de acurácia conectado! Aguardando mensagens...")
-                
-                while self.game_mode and self.is_recording:
-                    try:
-                        # Recebe as mensagens
-                        message = socket.recv_string(zmq.NOBLOCK)
-                        print(f"📨 DEBUG: Mensagem recebida: '{message}'")
-                        # Emitir signal para processar na thread principal
-                        self.accuracy_message_signal.emit(message)
-                    except zmq.Again:
-                        # Timeout - continuar
-                        continue
-                    except Exception as e:
-                        print(f"❌ DEBUG: Erro ao receber mensagem de acurácia: {e}")
-                        break
-                        
-                print("Parando UDP receiver de acurácia...")
-                socket.close()
-                context.term()
-                
-            except Exception as e:
-                print(f"Erro no UDP receiver para acurácia: {e}")
-        
-        # Iniciar thread
-        self.accuracy_thread = threading.Thread(target=udp_listener, daemon=True)
-        self.accuracy_thread.start()
+        """
+        Inicia o receptor de acurácia.
+        Agora usa o sistema de callbacks do UnityCommunicator.
+        """
+        print("✅ Sistema de acurácia ativo - usando callbacks do UnityCommunicator")
+        # O receptor de mensagens já está ativo através dos callbacks do unity_communicator
+        # As mensagens serão processadas automaticamente via _on_unity_message()
         
     def stop_accuracy_udp_receiver(self):
         """Para o UDP receiver de acurácia"""
-        if self.accuracy_thread and self.accuracy_thread.is_alive():
-            # A thread vai parar automaticamente quando game_mode = False
-            self.accuracy_thread.join(timeout=2.0)
-            print("UDP receiver de acurácia parado")
+        print("Sistema de acurácia parado - callbacks mantidos ativos")
         
     def predict_movement(self, eeg_data):
         """Faz predição do movimento com o modelo CNN"""
         if not self.game_mode or self.model is None:
             return
+        
+        # Verificar se a IA pode fazer previsões (janela de 5 segundos)
+        if not self.ai_prediction_enabled:
+            return
+            
+        # Verificar se ainda está dentro da janela de tempo permitida
+        if self.task_start_time is not None:
+            elapsed_time = time.time() * 1000 - self.task_start_time  # em ms
+            if elapsed_time > self.ai_window_duration:
+                self.ai_prediction_enabled = False
+                print(f"🚫 Janela de IA fechada após {self.ai_window_duration/1000}s")
+                return
             
         try:
             # Normalização por canal
@@ -1128,3 +1203,35 @@ class StreamingWidget(QWidget):
                 self.record_btn.setText("Iniciar Jogo")
             else:
                 self.record_btn.setText("Iniciar Gravação")
+    
+    def _on_unity_message(self, message: str):
+        """Callback para mensagens recebidas do Unity"""
+        print(f"[Unity] Mensagem recebida: {message}")
+        
+        # Verificar se recebeu resposta CORRECT ou WRONG
+        if "CORRECT" in message or "WRONG" in message:
+            print(f"✅ Resposta recebida: {message}")
+            if self.waiting_for_response:
+                self.waiting_for_response = False
+                self.response_received = True
+                print("🔓 Liberado para enviar próximo sinal aleatório")
+                # Aguardar 7 segundos antes do próximo sinal
+                QTimer.singleShot(7000, self.send_next_random_signal)
+        
+        # Processar mensagens específicas do Unity
+        if "FLOWER" in message:
+            # Usar o signal existente para processar mensagens de acurácia
+            self.accuracy_message_signal.emit(message)
+        elif "CONNECTED" in message:
+            print("[Unity] Confirmação de conexão recebida")
+        elif "STATUS" in message:
+            print(f"[Unity] Status: {message}")
+    
+    def _on_unity_connection(self, connected: bool):
+        """Callback para mudanças no status de conexão com Unity"""
+        if connected:
+            print("[Unity] TCP conectado")
+            # Aqui você pode atualizar a UI para mostrar que o Unity está conectado
+        else:
+            print("[Unity] TCP desconectado")
+            # Aqui você pode atualizar a UI para mostrar que o Unity foi desconectado
