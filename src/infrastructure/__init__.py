@@ -1,3 +1,0 @@
-"""
-Infraestrutura - Adapters
-"""

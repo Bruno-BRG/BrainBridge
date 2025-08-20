@@ -1,3 +1,0 @@
-"""
-Outbound Adapters
-"""

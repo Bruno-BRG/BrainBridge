@@ -12,7 +12,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 import pytest
 from src.application.usecase.patient_management_usecase import PatientManagementUseCase
 from src.application.port.out.patient_repository_port import PatientRepositoryPort, RepositoryError
-from src.application.port.in.patient_management_port import InvalidPatientDataError, PatientRegistrationError
+from src.application.port.in.patient_management_port import (
+    PatientManagementInPort,
+    InvalidPatientDataError,
+    PatientRegistrationError,
+    PatientSearchError
+)
 from src.interface.dto.patient_dto import CreatePatientDTO, UpdatePatientNotesDTO
 from src.domain.model.patient import Patient, PatientId
 
