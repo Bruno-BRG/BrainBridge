@@ -1,0 +1,3 @@
+"""
+Sistema BCI - Arquitetura Hexagonal
+"""

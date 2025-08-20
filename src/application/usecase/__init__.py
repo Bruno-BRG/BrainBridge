@@ -1,0 +1,3 @@
+"""
+Use Cases da aplicação
+"""
