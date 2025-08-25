@@ -2,6 +2,7 @@
 Conversor UDP para CSV em tempo real
 Converte dados UDP (formato buffer) para formato CSV padrão OpenBCI em tempo real
 Funciona em paralelo com o csv_data_logger
+Aplica filtro Butterworth (0.5-50Hz) antes de salvar os dados
 """
 
 import pandas as pd
@@ -14,6 +15,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 import logging
 from .udp_receiver_BCI import UDPReceiver
+from ..signal_processing.butter_filter import ButterworthFilter
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +77,16 @@ class RealTimeUDPConverter:
         ]
         
         self.headers_written = False
+        
+        # Inicializar filtro Butterworth
+        self.butter_filter = ButterworthFilter(
+            lowcut=0.5,    # 0.5 Hz - remove artefatos de movimento 
+            highcut=50.0,  # 50 Hz - remove ruído elétrico
+            fs=125.0,      # 125 Hz - frequência de amostragem padrão OpenBCI
+            order=6        # Ordem 6 - filtros em cascata (3+3) para estabilidade
+        )
+        
+        logger.info(f"Filtro Butterworth inicializado: {self.butter_filter.get_filter_info()}")
         
     def _process_udp_data(self, data: Any):
         """
@@ -187,6 +199,26 @@ class RealTimeUDPConverter:
                 
             buffer_size = array_lengths[0]
             
+            # Aplicar filtro Butterworth aos dados antes de converter
+            try:
+                # Organizar dados em matriz (16 canais x N amostras)
+                eeg_matrix = np.zeros((16, buffer_size))
+                for ch in range(16):
+                    eeg_matrix[ch, :] = channel_arrays[ch]
+                
+                # Aplicar filtro Butterworth
+                filtered_eeg_matrix = self.butter_filter.apply_filter(eeg_matrix)
+                
+                # Atualizar arrays com dados filtrados
+                for ch in range(16):
+                    channel_arrays[ch] = filtered_eeg_matrix[ch, :]
+                    
+                logger.debug(f"Filtro Butterworth aplicado em {buffer_size} amostras, 16 canais")
+                
+            except Exception as filter_error:
+                logger.warning(f"Erro ao aplicar filtro Butterworth: {filter_error}")
+                # Continuar com dados sem filtrar em caso de erro
+            
             # Converter cada amostra do buffer
             for sample_in_buffer in range(buffer_size):
                 sample_data = {
@@ -247,12 +279,25 @@ class RealTimeUDPConverter:
             }
             
             # Extrair valores dos canais
+            eeg_sample = np.zeros(16)
             for ch in range(16):
                 ch_key = f'Ch{ch+1}'
                 if ch_key in data:
-                    sample_data[f'EXG Channel {ch}'] = float(data[ch_key])
+                    eeg_sample[ch] = float(data[ch_key])
                 else:
-                    sample_data[f'EXG Channel {ch}'] = 0.0
+                    eeg_sample[ch] = 0.0
+            
+            # Aplicar filtro Butterworth para amostra única
+            try:
+                filtered_eeg_sample = self.butter_filter.apply_realtime_filter(eeg_sample)
+                logger.debug("Filtro Butterworth aplicado em amostra única")
+            except Exception as filter_error:
+                logger.warning(f"Erro ao aplicar filtro em amostra única: {filter_error}")
+                filtered_eeg_sample = eeg_sample
+            
+            # Preencher dados filtrados
+            for ch in range(16):
+                sample_data[f'EXG Channel {ch}'] = float(filtered_eeg_sample[ch])
             
             # Preencher outras colunas com zeros
             other_columns = [
@@ -302,6 +347,35 @@ class RealTimeUDPConverter:
             
             logger.debug(f"Processando {num_channels} canais x {num_samples} amostras")
             
+            # Aplicar filtro Butterworth se há dados suficientes
+            filtered_data_array = data_array.copy()
+            try:
+                if num_samples > 3 * self.butter_filter.order and num_channels >= 16:
+                    # Organizar dados em matriz (16 canais x N amostras)
+                    eeg_matrix = np.zeros((16, num_samples))
+                    for ch in range(16):
+                        if ch < num_channels:
+                            eeg_matrix[ch, :] = data_array[ch]
+                        else:
+                            eeg_matrix[ch, :] = 0.0
+                    
+                    # Aplicar filtro
+                    filtered_eeg_matrix = self.butter_filter.apply_filter(eeg_matrix)
+                    
+                    # Atualizar dados filtrados
+                    filtered_data_array = []
+                    for ch in range(num_channels):
+                        if ch < 16:
+                            filtered_data_array.append(filtered_eeg_matrix[ch, :].tolist())
+                        else:
+                            filtered_data_array.append(data_array[ch])
+                    
+                    logger.debug(f"Filtro Butterworth aplicado em timeSeriesRaw: {num_samples} amostras, {min(num_channels, 16)} canais")
+                    
+            except Exception as filter_error:
+                logger.warning(f"Erro ao aplicar filtro em timeSeriesRaw: {filter_error}")
+                filtered_data_array = data_array  # Usar dados originais
+            
             # Converter cada amostra temporal
             for sample_idx in range(num_samples):
                 sample_data = {
@@ -311,11 +385,11 @@ class RealTimeUDPConverter:
                     'Annotations': ''
                 }
                 
-                # Extrair valores de cada canal para esta amostra
+                # Extrair valores de cada canal para esta amostra (usando dados filtrados)
                 for ch_idx in range(16):  # OpenBCI padrão tem 16 canais
-                    if ch_idx < num_channels:
+                    if ch_idx < len(filtered_data_array):
                         # Canal existe nos dados
-                        sample_data[f'EXG Channel {ch_idx}'] = float(data_array[ch_idx][sample_idx])
+                        sample_data[f'EXG Channel {ch_idx}'] = float(filtered_data_array[ch_idx][sample_idx])
                     else:
                         # Canal não existe, preencher com zero
                         sample_data[f'EXG Channel {ch_idx}'] = 0.0
@@ -422,6 +496,10 @@ class RealTimeUDPConverter:
             return
             
         try:
+            # Resetar estado do filtro para nova sessão
+            self.butter_filter.reset_filter_state()
+            logger.info("Estado do filtro Butterworth resetado para nova sessão")
+            
             # Configurar callback no receptor UDP
             self.udp_receiver.set_callback(self._process_udp_data)
             

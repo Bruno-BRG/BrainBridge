@@ -6,6 +6,7 @@ import torch
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
 from ..network.udp_receiver_BCI import UDPReceiver_BCI
+from ..signal_processing.butter_filter import ButterworthFilter
 
 class StreamingThread(QThread):
     """Thread para streaming de dados"""
@@ -19,6 +20,14 @@ class StreamingThread(QThread):
         self.udp_receiver = None
         self.data_queue = deque(maxlen=100)
         self.is_mock_mode = False
+        
+        # Inicialização do filtro Butterworth
+        self.butter_filter = ButterworthFilter(
+            lowcut=0.5,    # 0.5 Hz - remove artefatos de movimento
+            highcut=50.0,  # 50 Hz - remove ruído elétrico
+            fs=125.0,      # 125 Hz - frequência de amostragem padrão OpenBCI
+            order=6        # Ordem 6 - filtros em cascata (3+3) para estabilidade
+        )
         
         # Inicialização do modelo
         self.model = None
@@ -99,7 +108,43 @@ class StreamingThread(QThread):
             self.connection_status.emit(False)
     
     def extract_eeg_from_udp(self, data):
-        """Extrai dados EEG do formato UDP"""
+        """Extrai dados EEG do formato UDP e aplica filtro Butterworth"""
+        try:
+            raw_eeg_data = self._extract_raw_eeg_from_udp(data)
+            
+            if raw_eeg_data is None:
+                return None
+            
+            # Aplicar filtro Butterworth aos dados extraídos
+            try:
+                if isinstance(raw_eeg_data, list):
+                    # Lista de amostras - filtrar cada uma
+                    filtered_samples = []
+                    for sample in raw_eeg_data:
+                        if len(sample) == 16:  # Verificar se tem 16 canais
+                            filtered_sample = self.butter_filter.apply_realtime_filter(sample)
+                            filtered_samples.append(filtered_sample)
+                        else:
+                            filtered_samples.append(sample)  # Manter original se não tem 16 canais
+                    return filtered_samples
+                else:
+                    # Amostra única - filtrar diretamente
+                    if len(raw_eeg_data) == 16:  # Verificar se tem 16 canais
+                        return self.butter_filter.apply_realtime_filter(raw_eeg_data)
+                    else:
+                        return raw_eeg_data  # Manter original se não tem 16 canais
+                        
+            except Exception as filter_error:
+                print(f"Erro ao aplicar filtro Butterworth: {filter_error}")
+                # Em caso de erro no filtro, retornar dados sem filtrar
+                return raw_eeg_data
+            
+        except Exception as e:
+            print(f"Erro ao extrair EEG: {e}")
+            return None
+    
+    def _extract_raw_eeg_from_udp(self, data):
+        """Extrai dados EEG brutos do formato UDP (sem filtro)"""
         try:
             # Se os dados são string, tentar converter para JSON
             if isinstance(data, str):
@@ -149,7 +194,7 @@ class StreamingThread(QThread):
                 
                 # Formato com channels
                 elif 'channels' in data:
-                    return self.extract_eeg_from_udp(data['channels'])
+                    return self._extract_raw_eeg_from_udp(data['channels'])
             
             # Se é lista, assumir que são os 16 canais
             elif isinstance(data, list) and len(data) >= 16:
@@ -158,6 +203,6 @@ class StreamingThread(QThread):
             return None
             
         except Exception as e:
-            print(f"Erro ao extrair EEG: {e}")
+            print(f"Erro ao extrair EEG bruto: {e}")
             return None
 
