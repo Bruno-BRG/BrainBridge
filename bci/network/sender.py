@@ -37,14 +37,14 @@ def broadcast_ips(stop_event, udp_port=UDP_PORT):
     message = ','.join(ips).encode('utf-8')
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    print(f"[UDP] Iniciando broadcast em porta {udp_port}: {ips}")
+    print(f"📻 [UDP] Iniciando broadcast em porta {udp_port}: {', '.join(ips)}")
     try:
         while not stop_event.is_set():
             sock.sendto(message, ('<broadcast>', udp_port))
             time.sleep(BROADCAST_INTERVAL)
     finally:
         sock.close()
-        print("[UDP] Broadcast parado.")
+        print("📻 [UDP] Broadcast parado.")
 
 
 def handle_unity_connection(conn, addr):
@@ -53,7 +53,7 @@ def handle_unity_connection(conn, addr):
     - Inicia thread de recebimento e impressão de mensagens do Unity.
     - Faz loop interativo para enviar comandos ao Unity.
     """
-    print(f"[TCP] Unity conectado de {addr}")
+    print(f"✅ [TCP] Unity CONECTADO! 🎮 ({addr[0]}:{addr[1]})")
 
     # Thread para receber mensagens do Unity
     def recv_loop():
@@ -61,32 +61,32 @@ def handle_unity_connection(conn, addr):
             while True:
                 data = conn.recv(BUFFER_SIZE)
                 if not data:
-                    print("[TCP] Unity desconectou.")
+                    print("🔌 [TCP] Unity desconectou.")
                     break
                 text = data.decode('utf-8', errors='ignore').strip()
-                print(f"[TCP RECEIVED] {text}")
+                print(f"🎮 [TCP] ⬅ {text}")
         except Exception as e:
-            print(f"[TCP] Erro no recv: {e}")
+            print(f"❌ [TCP] Erro no recv: {e}")
 
     recv_thread = threading.Thread(target=recv_loop, daemon=True)
     recv_thread.start()
 
     # Loop interativo de envio
     try:
-        print("Digite comandos para enviar ao Unity (ex: RIGHT_HAND_CLOSE). 'exit' para sair.")
+        print("💭 Digite comandos para enviar ao Unity (ex: RIGHT_HAND_CLOSE). 'exit' para sair.")
         while True:
-            cmd = input('> ').strip()
+            cmd = input('🎯 > ').strip()
             if cmd.lower() in ('exit', 'quit', 'sair'):
                 break
             if cmd:
                 message = cmd + '\n'
                 conn.sendall(message.encode('utf-8'))
-                print(f"[TCP SENT] {cmd}")
+                print(f"🔗 [TCP] ➤ {cmd}")
     except KeyboardInterrupt:
-        print("\n[TCP] Envio interrompido pelo usuário.")
+        print("\n🛑 [TCP] Envio interrompido pelo usuário.")
     finally:
         conn.close()
-        print("[TCP] Conexão encerrada.")
+        print("🔌 [TCP] Conexão Unity encerrada.")
 
 
 def tcp_server(stop_event, tcp_port=TCP_PORT):
@@ -97,16 +97,16 @@ def tcp_server(stop_event, tcp_port=TCP_PORT):
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(('', tcp_port))
     sock.listen(1)
-    print(f"[TCP] Servidor ouvindo na porta {tcp_port}...")
+    print(f"🔗 [TCP] Servidor aguardando Unity na porta {tcp_port}...")
     try:
         conn, addr = sock.accept()
         stop_event.set()  # para o broadcast
         handle_unity_connection(conn, addr)
     except Exception as e:
-        print(f"[TCP] Erro no server: {e}")
+        print(f"❌ [TCP] Erro no server: {e}")
     finally:
         sock.close()
-        print("[TCP] Servidor parado.")
+        print("🔗 [TCP] Servidor parado.")
 
 
 def main():

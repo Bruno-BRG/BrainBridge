@@ -9,6 +9,15 @@ import threading
 import time
 import zmq
 from typing import Optional, List, Callable
+from enum import Enum
+
+class MessageLevel(Enum):
+    """Níveis de verbosidade das mensagens"""
+    SILENT = 0      # Sem mensagens
+    MINIMAL = 1     # Apenas conexões e erros críticos
+    NORMAL = 2      # Mensagens importantes (padrão)
+    VERBOSE = 3     # Todas as mensagens incluindo comandos
+    DEBUG = 4       # Máximo detalhe incluindo timeouts
 
 class UnityCommunicator:
     """
@@ -42,6 +51,9 @@ class UnityCommunicator:
             
         self._initialized = True
         
+        # Configuração de verbosidade
+        self.message_level = MessageLevel.NORMAL
+        
         # Estado da conexão
         self.is_active = False
         self.tcp_connected = False
@@ -60,6 +72,25 @@ class UnityCommunicator:
         # Callbacks para eventos
         self.on_message_received: Optional[Callable[[str], None]] = None
         self.on_connection_changed: Optional[Callable[[bool], None]] = None
+    
+    def _print(self, message: str, level: MessageLevel = MessageLevel.NORMAL):
+        """Print condicional baseado no nível de verbosidade"""
+        if self.message_level.value >= level.value:
+            print(message)
+    
+    def set_message_level(self, level: MessageLevel):
+        """Define o nível de verbosidade das mensagens"""
+        self.message_level = level
+        if level == MessageLevel.SILENT:
+            self._print("🔇 Modo silencioso ativado", MessageLevel.MINIMAL)
+        elif level == MessageLevel.MINIMAL:
+            self._print("🔇 Modo minimalista ativado", MessageLevel.MINIMAL)
+        elif level == MessageLevel.NORMAL:
+            self._print("🔊 Modo normal ativado", MessageLevel.MINIMAL)
+        elif level == MessageLevel.VERBOSE:
+            self._print("📢 Modo verboso ativado", MessageLevel.MINIMAL)
+        elif level == MessageLevel.DEBUG:
+            self._print("🐛 Modo debug ativado", MessageLevel.MINIMAL)
     
     @staticmethod
     def get_all_ips() -> List[str]:
@@ -83,7 +114,7 @@ class UnityCommunicator:
         Retorna True se iniciado com sucesso
         """
         if self.is_active:
-            print("Servidor já está ativo")
+            self._print("🔄 Servidor já está ativo", MessageLevel.NORMAL)
             return True
             
         try:
@@ -110,11 +141,14 @@ class UnityCommunicator:
             self.tcp_server_thread.start()
             
             self.is_active = True
-            print(f"Servidor iniciado - ZMQ: {self.ZMQ_PORT}, TCP: {self.TCP_PORT}, UDP: {self.UDP_PORT}")
+            self._print(f"🚀 Servidor Unity Comunicação INICIADO", MessageLevel.MINIMAL)
+            self._print(f"   📡 ZMQ Publisher: porta {self.ZMQ_PORT}", MessageLevel.NORMAL)
+            self._print(f"   🔗 TCP Server: porta {self.TCP_PORT}", MessageLevel.NORMAL)
+            self._print(f"   📻 UDP Broadcast: porta {self.UDP_PORT}", MessageLevel.NORMAL)
             return True
             
         except Exception as e:
-            print(f"Erro ao iniciar servidor: {e}")
+            self._print(f"❌ Erro ao iniciar servidor: {e}", MessageLevel.MINIMAL)
             self.stop_server()
             return False
     
@@ -162,7 +196,7 @@ class UnityCommunicator:
             if self.on_connection_changed:
                 self.on_connection_changed(False)
         
-        print("Servidor parado e recursos limpos")
+        self._print("🛑 Servidor Unity Comunicação PARADO e recursos limpos", MessageLevel.MINIMAL)
     
     def send_command(self, command: str) -> bool:
         """
@@ -170,7 +204,7 @@ class UnityCommunicator:
         Retorna True se enviado com sucesso
         """
         if not self.is_active:
-            print("Servidor não está ativo")
+            self._print("⚠️  Servidor não está ativo", MessageLevel.NORMAL)
             return False
             
         success = False
@@ -179,20 +213,20 @@ class UnityCommunicator:
         if self.zmq_socket:
             try:
                 self.zmq_socket.send_string(command)
-                print(f"[ZMQ] Comando enviado: {command}")
+                self._print(f"📡 [ZMQ] ➤ {command}", MessageLevel.VERBOSE)
                 success = True
             except Exception as e:
-                print(f"[ZMQ] Erro ao enviar: {e}")
+                self._print(f"❌ [ZMQ] Erro ao enviar: {e}", MessageLevel.MINIMAL)
         
         # Enviar via TCP se conectado
         if self.tcp_connected and self.tcp_connection:
             try:
                 message = command + '\n'
                 self.tcp_connection.sendall(message.encode('utf-8'))
-                print(f"[TCP] Comando enviado: {command}")
+                self._print(f"🔗 [TCP] ➤ {command}", MessageLevel.VERBOSE)
                 success = True
             except Exception as e:
-                print(f"[TCP] Erro ao enviar: {e}")
+                self._print(f"❌ [TCP] Erro ao enviar: {e}", MessageLevel.MINIMAL)
                 self.tcp_connected = False
                 if self.on_connection_changed:
                     self.on_connection_changed(False)
@@ -208,7 +242,7 @@ class UnityCommunicator:
         elif hand.lower() in ['esquerda', 'left']:
             return self.send_command("LEFT_HAND_CLOSE")
         else:
-            print(f"Comando de mão inválido: {hand}")
+            self._print(f"⚠️  Comando de mão inválido: {hand}", MessageLevel.NORMAL)
             return False
     
     def send_trigger_command(self, hand: str) -> bool:
@@ -220,7 +254,7 @@ class UnityCommunicator:
         elif hand.lower() in ['esquerda', 'left']:
             return self.send_command("TRIGGER_LEFT")
         else:
-            print(f"Comando de trigger inválido: {hand}")
+            self._print(f"⚠️  Comando de trigger inválido: {hand}", MessageLevel.NORMAL)
             return False
     
     def _broadcast_ips(self):
@@ -232,17 +266,17 @@ class UnityCommunicator:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         
-        print(f"[UDP] Iniciando broadcast: {ips}")
+        self._print(f"📻 [UDP] Broadcast iniciado: {', '.join(ips)}", MessageLevel.NORMAL)
         
         try:
             while not self.stop_event.is_set():
                 sock.sendto(message, ('<broadcast>', self.UDP_PORT))
                 time.sleep(self.BROADCAST_INTERVAL)
         except Exception as e:
-            print(f"[UDP] Erro no broadcast: {e}")
+            self._print(f"❌ [UDP] Erro no broadcast: {e}", MessageLevel.MINIMAL)
         finally:
             sock.close()
-            print("[UDP] Broadcast parado")
+            self._print("📻 [UDP] Broadcast parado", MessageLevel.NORMAL)
     
     def _tcp_server(self):
         """
@@ -255,12 +289,12 @@ class UnityCommunicator:
         try:
             sock.bind(('', self.TCP_PORT))
             sock.listen(1)
-            print(f"[TCP] Servidor ouvindo na porta {self.TCP_PORT}")
+            self._print(f"🔗 [TCP] Servidor aguardando Unity na porta {self.TCP_PORT}...", MessageLevel.NORMAL)
             
             while not self.stop_event.is_set():
                 try:
                     conn, addr = sock.accept()
-                    print(f"[TCP] Unity conectado de {addr}")
+                    self._print(f"✅ [TCP] Unity CONECTADO! 🎮 ({addr[0]}:{addr[1]})", MessageLevel.MINIMAL)
                     
                     self.tcp_connection = conn
                     self.tcp_connected = True
@@ -280,17 +314,19 @@ class UnityCommunicator:
                     self.tcp_handler_thread.join()
                     
                 except socket.timeout:
+                    # Timeout é normal, apenas continua verificando stop_event
+                    self._print("🔍 [TCP] Verificando conexões...", MessageLevel.DEBUG)
                     continue
                 except Exception as e:
                     if not self.stop_event.is_set():
-                        print(f"[TCP] Erro no servidor: {e}")
+                        self._print(f"❌ [TCP] Erro no servidor: {e}", MessageLevel.MINIMAL)
                     break
                     
         except Exception as e:
-            print(f"[TCP] Erro ao iniciar servidor: {e}")
+            self._print(f"❌ [TCP] Erro ao iniciar servidor: {e}", MessageLevel.MINIMAL)
         finally:
             sock.close()
-            print("[TCP] Servidor TCP parado")
+            self._print("🔗 [TCP] Servidor TCP parado", MessageLevel.NORMAL)
     
     def _handle_tcp_connection(self, conn: socket.socket, addr):
         """
@@ -303,19 +339,21 @@ class UnityCommunicator:
                 try:
                     data = conn.recv(self.BUFFER_SIZE)
                     if not data:
-                        print("[TCP] Unity desconectou")
+                        self._print("🔌 [TCP] Unity desconectou", MessageLevel.MINIMAL)
                         break
                         
                     message = data.decode('utf-8', errors='ignore').strip()
-                    print(f"[TCP] Recebido: {message}")
+                    self._print(f"🎮 [TCP] ⬅ {message}", MessageLevel.VERBOSE)
                     
                     if self.on_message_received:
                         self.on_message_received(message)
                         
                 except socket.timeout:
+                    # Timeout é normal, apenas continua verificando stop_event
+                    self._print("⏰ [TCP] Timeout de recepção", MessageLevel.DEBUG)
                     continue
                 except Exception as e:
-                    print(f"[TCP] Erro na recepção: {e}")
+                    self._print(f"❌ [TCP] Erro na recepção: {e}", MessageLevel.MINIMAL)
                     break
                     
         finally:
@@ -330,7 +368,7 @@ class UnityCommunicator:
             if self.on_connection_changed:
                 self.on_connection_changed(False)
             
-            print("[TCP] Conexão encerrada")
+            self._print("🔌 [TCP] Conexão Unity encerrada", MessageLevel.MINIMAL)
     
     def set_message_callback(self, callback: Callable[[str], None]):
         """Define callback para mensagens recebidas"""
@@ -339,6 +377,18 @@ class UnityCommunicator:
     def set_connection_callback(self, callback: Callable[[bool], None]):
         """Define callback para mudanças de conexão"""
         self.on_connection_changed = callback
+    
+    def get_connection_status(self) -> bool:
+        """Retorna se o Unity está conectado via TCP"""
+        return self.tcp_connected
+    
+    def get_server_status(self) -> bool:
+        """Retorna se o servidor está ativo"""
+        return self.is_active
+    
+    def get_message_level(self) -> MessageLevel:
+        """Retorna o nível atual de verbosidade"""
+        return self.message_level
 
 
 # Classe para compatibilidade com código existente
@@ -423,10 +473,11 @@ def main():
     communicator = UnityCommunicator()
     
     def on_message(message):
-        print(f"Mensagem recebida: {message}")
+        print(f"📬 Mensagem Unity: {message}")
     
     def on_connection(connected):
-        print(f"Conexão: {'Conectado' if connected else 'Desconectado'}")
+        status = "🎮 CONECTADO" if connected else "🔌 DESCONECTADO"
+        print(f"🔗 Status Unity: {status}")
     
     # Configurar callbacks
     communicator.set_message_callback(on_message)
@@ -434,24 +485,32 @@ def main():
     
     # Iniciar servidor
     if not communicator.start_server():
-        print("Falha ao iniciar servidor")
+        print("❌ Falha ao iniciar servidor")
         return
     
-    print("\n" + "="*50)
-    print("Sistema de Comunicação Unity Ativo")
-    print("="*50)
-    print("Comandos disponíveis:")
-    print("  - direita       : Controla mão direita") 
-    print("  - esquerda      : Controla mão esquerda")
-    print("  - trigger_right : Gatilho mão direita")
-    print("  - trigger_left  : Gatilho mão esquerda")
-    print("  - <comando>     : Comando personalizado")
-    print("  - sair          : Encerra o programa")
-    print("="*50)
+    print("\n" + "="*60)
+    print("🎮 SISTEMA DE COMUNICAÇÃO UNITY ATIVO 🎮")
+    print("="*60)
+    print("🎯 Comandos disponíveis:")
+    print("   🤚 direita       : Controla mão direita") 
+    print("   ✋ esquerda      : Controla mão esquerda")
+    print("   🎯 trigger_right : Gatilho mão direita")
+    print("   🎯 trigger_left  : Gatilho mão esquerda")
+    print("   ⚙️  <comando>     : Comando personalizado")
+    print("   � verbosity <n> : Mudar verbosidade (0-4)")
+    print("   �🚪 sair          : Encerra o programa")
+    print("="*60)
+    print("📊 Níveis de verbosidade:")
+    print("   0: SILENT - Sem mensagens")
+    print("   1: MINIMAL - Apenas conexões e erros")
+    print("   2: NORMAL - Mensagens importantes (padrão)")
+    print("   3: VERBOSE - Inclui comandos enviados/recebidos")
+    print("   4: DEBUG - Máximo detalhe")
+    print("="*60)
     
     try:
         while True:
-            comando = input("\nDigite um comando: ").strip()
+            comando = input("\n💭 Digite um comando: ").strip()
             
             if comando.lower() == 'sair':
                 break
@@ -463,14 +522,24 @@ def main():
                 communicator.send_trigger_command('direita')
             elif comando.lower() == 'trigger_left':
                 communicator.send_trigger_command('esquerda')
+            elif comando.lower().startswith('verbosity '):
+                try:
+                    level_num = int(comando.split()[1])
+                    if 0 <= level_num <= 4:
+                        level = MessageLevel(level_num)
+                        communicator.set_message_level(level)
+                    else:
+                        print("⚠️ Nível deve ser entre 0 e 4")
+                except (ValueError, IndexError):
+                    print("⚠️ Uso: verbosity <0-4>")
             elif comando:
                 communicator.send_command(comando)
                 
     except KeyboardInterrupt:
-        print("\nInterrompido pelo usuário")
+        print("\n🛑 Interrompido pelo usuário")
     finally:
         communicator.stop_server()
-        print("Programa encerrado")
+        print("👋 Programa encerrado")
 
 
 if __name__ == '__main__':

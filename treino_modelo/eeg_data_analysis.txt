@@ -1,9 +1,0 @@
-ANÁLISE DOS DADOS EEG
-==================================================
-
-Total de arquivos: 234
-Total de sujeitos: 78
-Segmentos T1->T0: 1638
-Segmentos T2->T0: 1638
-Arquivos problemáticos: 0
-
