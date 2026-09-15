@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from brainbridge_v2.infrastructure.ml import trainer
+from brainbridge_v2.infrastructure.ml.eeg_pipeline import write_pipeline_manifest
 
 
 class FakeHistory:
@@ -21,7 +22,8 @@ class FakeGeneralizedModel:
     def __init__(self):
         self.fit_calls = []
         self.saved_path = None
-        self.input_shape = (None, 4, 3)
+        self.input_shape = (None, 250, 16)
+        self.output_shape = (None, 2)
 
     def fit(self, *args, **kwargs):
         self.fit_calls.append((args, kwargs))
@@ -48,13 +50,14 @@ def test_infer_group_id_from_path_prefers_patient_or_subject_token():
 
 
 def test_collect_windowed_dataset_preserves_groups(monkeypatch):
-    def fake_load(path):
+    def fake_load(path, **kwargs):
         return np.ones((250, 16), dtype=np.float32), [""] * 250
 
     def fake_windows(data, markers, **kwargs):
         return np.ones((2, 4, 3), dtype=np.float32), np.array([0, 1], dtype=np.int32)
 
     monkeypatch.setattr(trainer, "_load_openbci_csv", fake_load)
+    monkeypatch.setattr(Path, "read_bytes", lambda path: str(path).encode())
     monkeypatch.setattr(trainer, "_create_windows_ht", fake_windows)
 
     X, y, groups, summaries = trainer.load_generalized_windowed_dataset(
@@ -75,7 +78,7 @@ def test_collect_windowed_dataset_preserves_groups(monkeypatch):
 def test_collect_windowed_dataset_filters_physionet_non_left_right_runs(monkeypatch):
     seen_paths = []
 
-    def fake_load(path):
+    def fake_load(path, **kwargs):
         seen_paths.append(Path(path).name)
         return np.ones((250, 16), dtype=np.float32), [""] * 250
 
@@ -83,6 +86,7 @@ def test_collect_windowed_dataset_filters_physionet_non_left_right_runs(monkeypa
         return np.ones((2, 4, 3), dtype=np.float32), np.array([0, 1], dtype=np.int32)
 
     monkeypatch.setattr(trainer, "_load_openbci_csv", fake_load)
+    monkeypatch.setattr(Path, "read_bytes", lambda path: str(path).encode())
     monkeypatch.setattr(trainer, "_create_windows_ht", fake_windows)
 
     X, y, groups, summaries = trainer.load_generalized_windowed_dataset(
@@ -145,7 +149,7 @@ def test_train_generalized_from_csvs_uses_group_holdout(monkeypatch):
 
 
 def test_train_generalized_requires_multiple_groups(monkeypatch):
-    X = np.ones((4, 4, 3), dtype=np.float32)
+    X = np.ones((4, 250, 16), dtype=np.float32)
     y = np.array([0, 1, 0, 1], dtype=np.int32)
     groups = np.array(["P001"] * 4)
 
@@ -161,7 +165,7 @@ def test_train_generalized_requires_multiple_groups(monkeypatch):
 
 
 def test_train_from_csvs_continues_from_base_model(monkeypatch):
-    X = np.ones((4, 4, 3), dtype=np.float32)
+    X = np.ones((4, 250, 16), dtype=np.float32)
     y = np.array([0, 1, 0, 1], dtype=np.int32)
     fake_model = FakeGeneralizedModel()
     loaded_paths = []
@@ -170,21 +174,23 @@ def test_train_from_csvs_continues_from_base_model(monkeypatch):
     monkeypatch.setattr(
         trainer,
         "_load_openbci_csv",
-        lambda path: (np.ones((250, 16), dtype=np.float32), [""] * 250),
+        lambda path, **kwargs: (np.ones((250, 16), dtype=np.float32), [""] * 250),
     )
-    monkeypatch.setattr(trainer, "_create_windows_ht", lambda *args, **kwargs: (X, y))
+    monkeypatch.setattr(trainer, "_create_windows_ht", lambda *args, **kwargs: (X, y, np.array(["a", "b", "c", "d"])))
+    monkeypatch.setattr(Path, "read_bytes", lambda path: str(path).encode())
 
     with tempfile.TemporaryDirectory() as temp_dir:
         base_model = Path(temp_dir) / "patient_9.keras"
         base_model.write_text("existing model", encoding="utf-8")
+        write_pipeline_manifest(base_model, training_source_stages=["raw"])
         monkeypatch.setattr(trainer, "MODELS_DIR", Path(temp_dir))
 
         result = trainer.train_from_csvs(
             ["session.csv"],
-            window_size=4,
+            window_size=250,
             epochs=1,
             batch_size=2,
-            model_name="patient_9",
+            model_name="patient_9_tuned",
             base_model_path=str(base_model),
             model_loader=lambda path: loaded_paths.append(path) or fake_model,
         )
@@ -192,31 +198,36 @@ def test_train_from_csvs_continues_from_base_model(monkeypatch):
         assert loaded_paths == [str(base_model)]
         assert fake_model.fit_calls
         assert fake_model.saved_path == Path(result.model_path)
-        assert result.model_path.endswith("patient_9.keras")
+        assert result.model_path.endswith("patient_9_tuned.keras")
 
 
 def test_train_from_csvs_rejects_incompatible_base_model(monkeypatch):
-    X = np.ones((4, 4, 3), dtype=np.float32)
+    X = np.ones((4, 250, 16), dtype=np.float32)
     y = np.array([0, 1, 0, 1], dtype=np.int32)
     fake_model = FakeGeneralizedModel()
-    fake_model.input_shape = (None, 250, 16)
+    fake_model.input_shape = (None, 250, 8)
+    loaded_paths = []
 
     monkeypatch.setitem(sys.modules, "tensorflow", object())
     monkeypatch.setattr(
         trainer,
         "_load_openbci_csv",
-        lambda path: (np.ones((250, 16), dtype=np.float32), [""] * 250),
+        lambda path, **kwargs: (np.ones((250, 16), dtype=np.float32), [""] * 250),
     )
-    monkeypatch.setattr(trainer, "_create_windows_ht", lambda *args, **kwargs: (X, y))
+    monkeypatch.setattr(trainer, "_create_windows_ht", lambda *args, **kwargs: (X, y, np.array(["a", "b", "c", "d"])))
+    monkeypatch.setattr(Path, "read_bytes", lambda path: str(path).encode())
 
     with tempfile.TemporaryDirectory() as temp_dir:
         base_model = Path(temp_dir) / "generalized.keras"
         base_model.write_text("base model", encoding="utf-8")
+        write_pipeline_manifest(base_model, training_source_stages=["raw"])
 
         with pytest.raises(ValueError, match="incompativel"):
             trainer.train_from_csvs(
                 ["session.csv"],
-                window_size=4,
+                window_size=250,
                 base_model_path=str(base_model),
-                model_loader=lambda path: fake_model,
+                model_loader=lambda path: loaded_paths.append(path) or fake_model,
             )
+        assert loaded_paths == [str(base_model)]
+        assert not fake_model.fit_calls

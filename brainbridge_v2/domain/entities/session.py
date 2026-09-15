@@ -28,4 +28,8 @@ class Session:
 
     @property
     def game_mode(self) -> bool:
-        return self.task_type == "jogo"
+        return (self.task_type or "").strip().lower() == "jogo"
+
+    @property
+    def free_mode(self) -> bool:
+        return (self.task_type or "").strip().lower() == "livre"

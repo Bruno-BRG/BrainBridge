@@ -1,21 +1,27 @@
 import os
+import math
 from datetime import datetime
 from typing import List
 from collections import deque
 import numpy as np
 import time
-import importlib
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QGroupBox, QComboBox, QGridLayout,
                            QMessageBox, QCheckBox,
-                           QLineEdit, QSpinBox, QDialog, QInputDialog, QFrame)
-from PyQt5.QtCore import pyqtSignal, QTimer, Qt
+                           QLineEdit, QSpinBox, QDialog, QInputDialog, QFrame,
+                           QScrollArea, QSplitter, QSizePolicy, QLayout)
+from PyQt5.QtCore import pyqtSignal, pyqtSlot, QTimer, QThreadPool, Qt
+from brainbridge_v2.presentation.gui.inference_worker import (
+    InferenceOutcome, InferenceWorker, RLUpdateOutcome, RLUpdateWorker)
 from brainbridge_v2.application.game_inference_coordinator import (
     GameInferenceCoordinator,
 )
+from brainbridge_v2.application.free_run_coordinator import (
+    FreeRunInferenceCoordinator,
+)
 from brainbridge_v2.application.eeg_quality import EEGWindowQualityValidator
 from brainbridge_v2.application.pipeline_telemetry import PipelineTelemetry
-from brainbridge_v2.application.runtime_config import DEFAULT_RUNTIME_CONFIG
+from brainbridge_v2.application.runtime_config import DEFAULT_RUNTIME_CONFIG, get_runtime
 from brainbridge_v2.application.unity_command_mapper import UnityCommandMapper
 from brainbridge_v2.infrastructure.config.settings import get_recording_path
 from brainbridge_v2.interface_adapters.controllers.eeg_stream_controller import (
@@ -53,6 +59,7 @@ from brainbridge_v2.interface_adapters.presenters.streaming_presenter import (
     MarkerStateViewModel,
     ModelViewModel,
     PredictionViewModel,
+    ProgressionPresenter,
     SessionViewModel,
     StartRecordingRequest,
     StartSessionRequest,
@@ -61,6 +68,7 @@ from brainbridge_v2.interface_adapters.presenters.streaming_presenter import (
     TaskViewStatePresenter,
 )
 from brainbridge_v2.presentation.gui.widgets.eeg_plot import EEGPlotWidget
+from brainbridge_v2.infrastructure.signal_processing.butter_filter import ButterworthFilter
 from brainbridge_v2.presentation.gui.styles import Theme
 
 from brainbridge_v2.presentation.gui.dialogs.training_dialog import TrainingDialog
@@ -76,9 +84,10 @@ except Exception:
 class DeveloperSettingsDialog(QDialog):
     def __init__(self, *, telemetry_enabled: bool, parent=None):
         super().__init__(parent)
+        from brainbridge_v2.application.runtime_config import get_runtime
         self.setWindowTitle("Modo Desenvolvedor")
         self.setModal(True)
-        self.resize(360, 160)
+        self.resize(380, 320)
         self.setStyleSheet(Theme.get_stylesheet())
         layout = QVBoxLayout()
         layout.setContentsMargins(16, 16, 16, 16)
@@ -91,6 +100,26 @@ class DeveloperSettingsDialog(QDialog):
         self.telemetry_checkbox = QCheckBox("Ativar telemetria da IA")
         self.telemetry_checkbox.setChecked(bool(telemetry_enabled))
         layout.addWidget(self.telemetry_checkbox)
+
+        self.rl_checkbox = QCheckBox("Ativar RL online (aprende com ✓/✗)")
+        self.rl_checkbox.setChecked(bool(get_runtime("rl_enabled", False)))
+        layout.addWidget(self.rl_checkbox)
+
+        rl_k_row = QHBoxLayout()
+        rl_k_row.addWidget(QLabel("RL: aplicar a cada K feedbacks"))
+        self.rl_k_spin = QSpinBox()
+        self.rl_k_spin.setRange(1, 50)
+        self.rl_k_spin.setValue(int(get_runtime("rl_batch_k", 5)))
+        rl_k_row.addWidget(self.rl_k_spin)
+        layout.addLayout(rl_k_row)
+
+        calib_row = QHBoxLayout()
+        calib_row.addWidget(QLabel("Calibração: trials mínimos"))
+        self.calib_trials_spin = QSpinBox()
+        self.calib_trials_spin.setRange(2, 60)
+        self.calib_trials_spin.setValue(int(get_runtime("calib_trials_required", 10)))
+        calib_row.addWidget(self.calib_trials_spin)
+        layout.addLayout(calib_row)
 
         buttons = QHBoxLayout()
         cancel_btn = QPushButton("Cancelar")
@@ -107,12 +136,22 @@ class DeveloperSettingsDialog(QDialog):
     def telemetry_enabled(self) -> bool:
         return self.telemetry_checkbox.isChecked()
 
+    def rl_enabled(self) -> bool:
+        return self.rl_checkbox.isChecked()
+
+    def rl_batch_k(self) -> int:
+        return int(self.rl_k_spin.value())
+
+    def calib_trials_required(self) -> int:
+        return int(self.calib_trials_spin.value())
+
 
 class StreamingWidget(QWidget):
     """Widget para streaming e gravação de dados"""
     
     # Signal para processar mensagens de acurácia de forma thread-safe
     accuracy_message_signal = pyqtSignal(str)
+    unity_message_signal = pyqtSignal(str, int)
     
     def __init__(
         self,
@@ -143,10 +182,15 @@ class StreamingWidget(QWidget):
         self.unity_connection_phase = "standby"
         self.orthosis_connection_phase = "standby"
         self.disconnection_in_progress = False
+        self._inference_job = None
+        self._inference_closed = False
 
     # Streaming / logging state
         self.csv_logger = None
         self.is_recording = False
+        self.session_affected_hand = None
+        self._movement_authorization = None
+        self._movement_sent = set()
         self.current_recording_id = None
         self.pending_marker = None  # Para marcadores pendentes no logger OpenBCI
         self.baseline_timer = QTimer()  # Timer para baseline
@@ -160,17 +204,7 @@ class StreamingWidget(QWidget):
         # Force canonical window_size to 250 (HardThinking canonical)
         self.window_size = DEFAULT_RUNTIME_CONFIG.window_size  # 2s @ 125Hz
         self.channels = DEFAULT_RUNTIME_CONFIG.channels
-        try:
-            # HardThinking config module was added to sys.path earlier when locating adapter
-            _ht_cfg_mod = importlib.import_module('config')
-            _ht_get_config = getattr(_ht_cfg_mod, 'get_config', None)
-            if _ht_get_config:
-                _cfg = _ht_get_config()
-                self.window_size = int(_cfg.data.window_size)
-                self.channels = int(_cfg.data.channels)
-        except Exception:
-            # keep fallbacks
-            pass
+        # Acquisition remains the full 16-channel cap, 250 samples at 125 Hz.
 
         self.predictions = deque(maxlen=50)  # Últimas predições
 
@@ -187,7 +221,7 @@ class StreamingWidget(QWidget):
 
     # Timer para ações automáticas no jogo
         self.game_action_timer = QTimer()
-        self.game_action_timer.timeout.connect(self.game_random_action)
+        self.game_action_timer.setSingleShot(True)
 
     # Controle para aguardar resposta antes do próximo sinal
         self.waiting_for_response = False
@@ -202,6 +236,21 @@ class StreamingWidget(QWidget):
             channels=self.channels,
             window_duration_ms=self.ai_window_duration,
         )
+        # Modo Livre: loop continuo sem VR obrigatorio (janela deslizante).
+        self.free_inference = FreeRunInferenceCoordinator(
+            window_size=self.window_size,
+            channels=self.channels,
+            stride=DEFAULT_RUNTIME_CONFIG.free_stride,
+        )
+        self.free_running = False
+        self.free_predictions = deque(maxlen=50)
+        self._free_inference_busy = False
+        self._free_last_send_ms: float = 0.0
+        # RL online (feedback humano): buffer de (janela, pred, conf, rotulo?).
+        self._rl_feedback: list = []
+        self._rl_job = None
+        self._rl_closed = False
+        self._rl_labeled_since_update = 0
         self.developer_mode_enabled = False
         self.pipeline_telemetry = PipelineTelemetry(enabled=False)
         self.eeg_quality_validator = EEGWindowQualityValidator(
@@ -223,6 +272,7 @@ class StreamingWidget(QWidget):
 
     # Conectar signal para processar mensagens de acurácia
         self.accuracy_message_signal.connect(self.process_accuracy_message)
+        self.unity_message_signal.connect(self._process_unity_message)
         self.streaming_state = StreamingSessionStateViewModel(
             patient_id=None,
             task_type=None,
@@ -281,6 +331,226 @@ class StreamingWidget(QWidget):
     def _is_game_mode(self) -> bool:
         return self.streaming_state.game_mode
 
+    def _is_free_mode(self) -> bool:
+        task = (self.task_combo.currentText() if hasattr(self, "task_combo") else "")
+        if task.strip().lower() == "livre":
+            return True
+        return bool(self.streaming_state.free_mode)
+
+    def _is_free_task_selected(self) -> bool:
+        try:
+            return self.task_combo.currentText().strip().lower() == "livre"
+        except Exception:
+            return False
+
+    def _start_free_run(self) -> None:
+        """Liga o loop continuo do modo Livre (sem exigir VR/ortese/modelo)."""
+        self.free_inference.start()
+        self.free_running = True
+        self._free_inference_busy = False
+        if self.inference_controller.has_loaded_model():
+            self._set_ai_status("free_running")
+        else:
+            self._set_ai_status("free_no_model")
+
+    def _stop_free_run(self) -> None:
+        self.free_running = False
+        self._free_inference_busy = False
+        try:
+            self.free_inference.stop()
+        except Exception:
+            pass
+
+    def _free_can_send(self, confidence: float) -> bool:
+        try:
+            threshold = float(DEFAULT_RUNTIME_CONFIG.free_send_min_confidence)
+        except Exception:
+            threshold = 0.6
+        if not (math.isfinite(confidence) and confidence >= threshold):
+            return False
+        now_ms = time.monotonic() * 1000
+        try:
+            cooldown = float(DEFAULT_RUNTIME_CONFIG.free_send_cooldown_ms)
+        except Exception:
+            cooldown = 3000.0
+        if now_ms - float(self._free_last_send_ms) < cooldown:
+            return False
+        return True
+
+    def _free_mark_sent(self) -> None:
+        self._free_last_send_ms = float(time.monotonic() * 1000)
+
+    # ---- RL online (feedback humano) ------------------------------------
+    def _rl_enabled(self) -> bool:
+        try:
+            return bool(get_runtime("rl_enabled", False))
+        except Exception:
+            return False
+
+    def _rl_push_prediction(self, window, predicted_index: int, confidence: float) -> None:
+        """Guarda predicao para futuro rotulo (✓/✗ ou CORRECT/WRONG do VR)."""
+        if not self._rl_enabled():
+            return
+        try:
+            buf_max = int(get_runtime("rl_buffer_max", 200))
+        except Exception:
+            buf_max = 200
+        try:
+            self._rl_feedback.append({
+                "window": np.array(window, copy=True),
+                "pred": int(predicted_index),
+                "conf": float(confidence),
+                "label": None,
+                "from_vr": False,
+            })
+            while len(self._rl_feedback) > max(10, buf_max):
+                self._rl_feedback.pop(0)
+            self._update_rl_status()
+        except Exception as exc:
+            print(f"[RL] Falha ao enfileirar: {exc}")
+
+    def _rl_latest_unlabeled(self):
+        for item in reversed(self._rl_feedback):
+            if item.get("label") is None:
+                return item
+        return None
+
+    def rl_feedback(self, correct: bool, *, from_vr: bool = False) -> bool:
+        """Rotula a predicao mais recente (✓=certa, ✗=errada->outra classe)."""
+        if not self._rl_enabled():
+            return False
+        item = self._rl_latest_unlabeled()
+        if item is None:
+            return False
+        pred = int(item["pred"])
+        item["label"] = pred if correct else (1 - pred)
+        item["from_vr"] = bool(from_vr)
+        self._rl_labeled_since_update += 1
+        try:
+            mistake_w = float(get_runtime("rl_mistake_weight", 3.0))
+        except Exception:
+            mistake_w = 3.0
+        item["weight"] = 1.0 if correct else max(1.0, mistake_w)
+        self._record_pipeline_event(
+            "RL_FEEDBACK", correct=bool(correct), from_vr=bool(from_vr),
+            pred=pred, label=int(item["label"]))
+        self._update_rl_status()
+        self._rl_maybe_apply()
+        return True
+
+    def _rl_maybe_apply(self) -> None:
+        """Aplica sozinho a cada K feedbacks (em background)."""
+        if not self._rl_enabled() or self._rl_job is not None:
+            return
+        try:
+            k = int(get_runtime("rl_batch_k", 5))
+            max_updates = int(get_runtime("rl_max_updates", 20))
+        except Exception:
+            k, max_updates = 5, 20
+        if self._rl_labeled_since_update < max(1, k):
+            return
+        if self.inference_controller.rl_updates_count() >= max(1, max_updates):
+            print("[RL] Limite de updates da sessao atingido.")
+            return
+        newly = [it for it in self._rl_feedback if it.get("label") is not None
+                 and not it.get("applied")]
+        if not newly:
+            self._rl_labeled_since_update = 0
+            return
+        try:
+            epochs = int(get_runtime("rl_epochs", 3))
+            lr = float(get_runtime("rl_lr", 5e-5))
+        except Exception:
+            epochs, lr = 3, 5e-5
+        windows = [it["window"] for it in newly]
+        labels = [int(it["label"]) for it in newly]
+        weights = [float(it.get("weight", 1.0)) for it in newly]
+        for it in newly:
+            it["applied"] = True
+        self._rl_labeled_since_update = 0
+        try:
+            worker = RLUpdateWorker(self.inference_controller, windows, labels,
+                                    weights, epochs=epochs, lr=lr,
+                                    freeze_backbone=False)
+            worker.signals.finished.connect(self._on_rl_finished, Qt.QueuedConnection)
+            self._rl_job = worker
+            self._record_pipeline_event("RL_UPDATE_START", n=len(newly))
+            QThreadPool.globalInstance().start(worker)
+        except Exception as exc:
+            self._rl_job = None
+            print(f"[RL] Falha ao enfileirar update: {exc}")
+
+    @pyqtSlot(object)
+    def _on_rl_finished(self, outcome) -> None:
+        self._rl_job = None
+        if getattr(self, "_rl_closed", False):
+            return
+        if not isinstance(outcome, RLUpdateOutcome):
+            return
+        if outcome.error is not None:
+            print(f"[RL] Update falhou: {outcome.error}")
+            self._record_pipeline_event("RL_UPDATE_FAILED", error=outcome.error)
+        else:
+            print(f"[RL] Update aplicado: n={outcome.n} loss={outcome.loss}")
+            self._record_pipeline_event("RL_UPDATE_DONE", n=outcome.n,
+                                        loss=outcome.loss,
+                                        updates=outcome.updates_applied)
+        self._update_rl_status()
+
+    def _rl_restore_base(self) -> None:
+        if self.inference_controller.rl_restore():
+            self._rl_feedback.clear()
+            self._rl_labeled_since_update = 0
+            QMessageBox.information(self, "RL", "Modelo restaurado para o checkpoint pre-RL.")
+        else:
+            QMessageBox.warning(self, "RL", "Sem checkpoint pre-RL para restaurar.")
+        self._update_rl_status()
+
+    def _update_rl_status(self) -> None:
+        if not hasattr(self, "rl_status_label"):
+            return
+        try:
+            if not self._rl_enabled():
+                self.rl_status_label.setText("RL: desligado")
+                return
+            labeled = sum(1 for it in self._rl_feedback if it.get("label") is not None)
+            updates = self.inference_controller.rl_updates_count()
+            self.rl_status_label.setText(
+                f"RL: {labeled} feedbacks · {updates} updates aplicados")
+        except Exception:
+            pass
+
+    def _ea_feed_sample(self, data) -> bool:
+        """Alimenta a calibracao EA; retorna True se a IA deve aguardar.
+
+        So atua quando ha modelo com EA carregado e ainda nao calibrado.
+        Mostra progresso no painel Livre e no status da IA.
+        """
+        try:
+            ctrl = self.inference_controller
+            if ctrl is None or not ctrl.ea_required():
+                return False
+            if ctrl.ea_calibrated():
+                return False
+            try:
+                ctrl.ea_observe_sample(data)
+            except Exception as exc:
+                print(f"[EA] Falha na calibracao: {exc}")
+                return False
+            if ctrl.ea_calibrated():
+                print("[EA] Calibracao concluida; IA liberada.")
+                self._record_pipeline_event("EA_CALIBRATED")
+                if self._is_free_task_selected():
+                    self._set_ai_status("free_running")
+                return False
+            done, total = ctrl.ea_progress()
+            msg = f"Livre: calibrando IA ({done}/{total})"
+            if hasattr(self, "free_result_label"):
+                self.free_result_label.setText(msg)
+            return True
+        except Exception:
+            return False
+
     def _sync_ai_prediction_state(self):
         self.eeg_buffer = self.game_inference.eeg_buffer
         self.samples_since_last_prediction = (
@@ -291,8 +561,43 @@ class StreamingWidget(QWidget):
         self.task_start_time = self.game_inference.window_started_at_ms
 
     def _reset_ai_prediction_window(self):
+        self._movement_authorization = None
         self.game_inference.reset()
         self._sync_ai_prediction_state()
+
+    def _schedule_game_callback(self, delay_ms, callback):
+        generation = self.game_inference.generation
+        QTimer.singleShot(delay_ms, lambda: (
+            callback() if self.is_recording and self._is_game_mode()
+            and generation == self.game_inference.generation else None
+        ))
+
+    def _arm_game_fallback(self):
+        self.game_action_timer.stop()
+        try:
+            self.game_action_timer.timeout.disconnect()
+        except TypeError:
+            pass
+        generation = self.game_inference.generation
+        self.game_action_timer.timeout.connect(lambda: (
+            self.game_random_action() if generation == self.game_inference.generation
+            and self.is_recording and self._is_game_mode() else None
+        ))
+        self.game_action_timer.start(self.game_action_interval)
+
+    def _authorize_transport(self, direction, transport):
+        authorization = self._movement_authorization
+        if not self.is_recording or not self._is_game_mode() or authorization is None:
+            return False
+        generation, index, confidence = authorization
+        if not self.game_inference.allows_movement(
+            generation, self.session_affected_hand, index, confidence
+        ) or direction != UnityCommandMapper.from_prediction(index).direction:
+            return False
+        if transport in self._movement_sent:
+            return False
+        self._movement_sent.add(transport)  # No retries: firmware has no ACK contract.
+        return True
 
     def _record_pipeline_event(self, name: str, **details):
         try:
@@ -307,6 +612,15 @@ class StreamingWidget(QWidget):
         )
         if dialog.exec_() == QDialog.Accepted:
             self.set_developer_mode(dialog.telemetry_enabled())
+            try:
+                from brainbridge_v2.application.runtime_config import set_runtime
+                set_runtime("rl_enabled", bool(dialog.rl_enabled()))
+                set_runtime("rl_batch_k", int(dialog.rl_batch_k()))
+                set_runtime("calib_trials_required",
+                            int(dialog.calib_trials_required()))
+            except Exception as exc:
+                print(f"[CONFIG] Falha ao aplicar: {exc}")
+            self._update_rl_status()
 
     def set_developer_mode(self, enabled: bool):
         self.developer_mode_enabled = bool(enabled)
@@ -326,350 +640,307 @@ class StreamingWidget(QWidget):
         return line
 
     def setup_ui(self):
-        """Configura a interface conforme bci_system.html (paleta Theme)."""
+        """Layout sem scroll: cartoes no topo + plot expansivel + sidebar fixa."""
         T = Theme
-        task_btn = T.btn_default("8px 20px", "14px", "700")
-        task_btn_jogo = T.btn_default("8px 24px", "14px", "700")
-        calib_btn = T.btn_default("6px 14px", "13px", "600")
-        calib_btn_sm = T.btn_default("6px 14px", "12px", "600")
-        connect_sm = T.btn_green("4px 10px", "11px", "600") + " border-radius: 4px;"
+        self.setStyleSheet(T.get_stylesheet() + T.compact_overrides())
+        task_btn = T.btn_default("5px 6px", "12px", "700")
+        task_btn_jogo = T.btn_default("5px 6px", "12px", "700")
+        calib_btn = T.btn_default("4px 8px", "12px", "600")
+        calib_btn_sm = T.btn_default("4px 6px", "11px", "600")
+        connect_sm = T.btn_green("3px 8px", "11px", "600") + " border-radius: 4px;"
         combo_style = (
-            f"padding: 4px 8px; font-size: 13px; background: {T.BTN_BG}; color: {T.TEXT_DARK}; "
+            f"padding: 3px 6px; font-size: 12px; background: {T.BTN_BG}; color: {T.TEXT_DARK}; "
             f"border: 1px solid {T.BTN_BORDER}; border-radius: 4px; font-weight: 600;"
         )
-        patient_title = (
-            f"color: {T.WHITE}; font-size: 22px; font-weight: 800; "
-            "letter-spacing: 0.5px; background: transparent;"
-        )
-        subtitle_18 = f"color: {T.WHITE}; font-size: 18px; font-weight: 800; background: transparent;"
-        subtitle_16 = f"color: {T.WHITE}; font-size: 16px; font-weight: 800; background: transparent;"
-        bci_status = (
-            f"color: {T.GREEN}; font-size: 22px; font-weight: 800; "
-            "letter-spacing: 0.5px; padding: 14px 0 8px 0; background: transparent;"
-        )
-        session_timer = (
-            f"color: {T.WHITE}; font-size: 20px; font-weight: 800; "
-            "letter-spacing: 0.5px; padding: 12px 0 16px 0; background: transparent;"
-        )
+        card_title_style = T.card_title()
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(0)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
-        top_container = QWidget()
-        top_container.setStyleSheet(T.panel())
-        top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(20, 16, 20, 12)
-        top_layout.setSpacing(12)
+        # ================= FILEIRA DE CARTOES =================
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(6)
 
-        # ---- COL LEFT: .col-left { flex-direction: column; gap: 10px } ----
-        col_left = QVBoxLayout()
-        col_left.setSpacing(10)
+        # ---- CARD 1: Paciente e tarefa ----
+        card1 = QGroupBox("1 · Paciente e tarefa")
+        c1 = QVBoxLayout(card1)
+        c1.setContentsMargins(8, 6, 8, 6)
+        c1.setSpacing(4)
 
-        # .patient-label { font-size: 22px; font-weight: 800; letter-spacing: 0.5px }
         self.patient_display_label = QLabel("Paciente: ####")
-        self.patient_display_label.setStyleSheet(patient_title)
-        col_left.addWidget(self.patient_display_label)
+        self.patient_display_label.setWordWrap(True)
+        self.patient_display_label.setStyleSheet(T.section_title("13px"))
+        c1.addWidget(self.patient_display_label)
 
-        # div: display flex, align-items stretch, gap 14px, margin-top 6px
-        left_mid = QHBoxLayout()
-        left_mid.setSpacing(14)
-        left_mid.setContentsMargins(0, 6, 0, 0)
+        pac_row = QHBoxLayout()
+        pac_row.setSpacing(4)
+        self.patient_combo = QComboBox()
+        self.patient_combo.setStyleSheet(combo_style)
+        self.patient_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.patient_combo.setMinimumContentsLength(10)
+        self.patient_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.patient_combo.currentTextChanged.connect(self._on_patient_changed)
+        self.refresh_patients_btn = QPushButton("↻")
+        self.refresh_patients_btn.setToolTip("Atualizar lista de pacientes")
+        self.refresh_patients_btn.setStyleSheet(T.btn_default("4px 8px", "12px", "700"))
+        self.refresh_patients_btn.setFixedWidth(34)
+        self.refresh_patients_btn.clicked.connect(self.refresh_patients)
+        pac_row.addWidget(self.patient_combo, 1)
+        pac_row.addWidget(self.refresh_patients_btn, 0)
+        c1.addLayout(pac_row)
 
-        # Baseline + Jogo: flex-direction column, gap 10px, justify-content center
-        task_col = QVBoxLayout()
-        task_col.setSpacing(10)
-        # button.btn: padding 8px 20px, font-size 14px, font-weight 700, width 100%
+        task_row = QHBoxLayout()
+        task_row.setSpacing(4)
         self.btn_baseline = QPushButton("Baseline")
         self.btn_baseline.setStyleSheet(task_btn)
         self.btn_baseline.clicked.connect(lambda: self._set_task("Baseline"))
         self.btn_jogo = QPushButton("Jogo")
         self.btn_jogo.setStyleSheet(task_btn_jogo)
         self.btn_jogo.clicked.connect(lambda: self._set_task("Jogo"))
-        task_col.addWidget(self.btn_baseline)
-        task_col.addWidget(self.btn_jogo)
-        left_mid.addLayout(task_col)
+        self.btn_livre = QPushButton("Livre")
+        self.btn_livre.setStyleSheet(task_btn_jogo)
+        self.btn_livre.setToolTip("Modo Livre: IA em tela sem VR obrigatorio. VR/ortese opcionais.")
+        self.btn_livre.clicked.connect(lambda: self._set_task("Livre"))
+        task_row.addWidget(self.btn_baseline, 1)
+        task_row.addWidget(self.btn_jogo, 1)
+        task_row.addWidget(self.btn_livre, 1)
+        c1.addLayout(task_row)
 
-        # .calibration-box { border: 2px solid #4a5568; border-radius: 6px; padding: 8px 14px;
-        #   flex-direction column; align-items center; gap 6px; background rgba(45,55,72,0.4) }
-        calib_frame = QWidget()
-        calib_frame.setStyleSheet(T.calibration_box())
-        calib_inner = QVBoxLayout()
-        calib_inner.setContentsMargins(14, 8, 14, 8)
-        calib_inner.setSpacing(6)
-        # button.btn: font-size 13px, font-weight 600
-        self.btn_iniciar_treino = QPushButton("Iniciar Treino")
+        train_row = QHBoxLayout()
+        train_row.setSpacing(4)
+        self.btn_iniciar_treino = QPushButton("▶ Treino")
         self.btn_iniciar_treino.setStyleSheet(calib_btn)
         self.btn_iniciar_treino.clicked.connect(lambda: self._set_task("Treino"))
-        calib_title = QLabel("Calibração")
-        calib_title.setStyleSheet(
-            f"font-size: 16px; font-weight: 700; color: {T.WHITE}; border: none; background: transparent;"
-        )
-        calib_title.setAlignment(Qt.AlignCenter)
-        # .calibration-btns { display flex; gap 8px }
-        calib_btns_row = QHBoxLayout()
-        calib_btns_row.setSpacing(8)
-        # button.btn: font-size 12px
-        self.btn_calib_esq = QPushButton("Esquerda")
+        self.btn_calib_esq = QPushButton("◀ Esq")
         self.btn_calib_esq.setStyleSheet(calib_btn_sm)
         self.btn_calib_esq.clicked.connect(lambda: self.add_marker("T1"))
-        self.btn_calib_dir = QPushButton("Direita")
+        self.btn_calib_dir = QPushButton("Dir ▶")
         self.btn_calib_dir.setStyleSheet(calib_btn_sm)
         self.btn_calib_dir.clicked.connect(lambda: self.add_marker("T2"))
-        calib_btns_row.addWidget(self.btn_calib_esq)
-        calib_btns_row.addWidget(self.btn_calib_dir)
-        calib_inner.addWidget(self.btn_iniciar_treino)
-        calib_inner.addWidget(calib_title)
-        calib_inner.addLayout(calib_btns_row)
-        calib_frame.setLayout(calib_inner)
-        left_mid.addWidget(calib_frame)
-        left_mid.addStretch()
+        train_row.addWidget(self.btn_iniciar_treino, 1)
+        train_row.addWidget(self.btn_calib_esq, 1)
+        train_row.addWidget(self.btn_calib_dir, 1)
+        c1.addLayout(train_row)
+        cards_row.addWidget(card1, 1)
 
-        col_left.addLayout(left_mid)
-        col_left.addStretch()
-        top_layout.addLayout(col_left, 1)
-        top_layout.addWidget(self._v_separator())
+        # ---- CARD 2: Conexoes ----
+        card2 = QGroupBox("2 · Conexões")
+        c2 = QVBoxLayout(card2)
+        c2.setContentsMargins(8, 6, 8, 6)
+        c2.setSpacing(4)
 
-        # ---- COL CENTER ----
-        col_center = QVBoxLayout()
-        col_center.setSpacing(6)
-        col_center.setContentsMargins(10, 0, 0, 0)
-
-        # .status-title { font-size: 22px; font-weight: 800 }
-        status_title = QLabel("Status")
-        status_title.setStyleSheet(T.section_title())
-        col_center.addWidget(status_title)
-
-        self.connect_btn = QPushButton("Conectar")
-        self.connect_btn.setStyleSheet(T.btn_green())
+        conn_top = QHBoxLayout()
+        conn_top.setSpacing(4)
+        self.connect_btn = QPushButton("Conectar tudo")
+        self.connect_btn.setStyleSheet(T.btn_green("4px 8px", "12px", "600"))
         self.connect_btn.clicked.connect(self.toggle_connection)
-        col_center.addWidget(self.connect_btn, 0, Qt.AlignLeft)
-
         self.developer_settings_btn = QPushButton("Dev: Off")
         self.developer_settings_btn.setStyleSheet(T.btn_dev(False))
         self.developer_settings_btn.clicked.connect(self.open_developer_settings)
-        col_center.addWidget(self.developer_settings_btn, 0, Qt.AlignLeft)
+        conn_top.addWidget(self.connect_btn, 1)
+        conn_top.addWidget(self.developer_settings_btn, 0)
+        c2.addLayout(conn_top)
 
-        # .status-list { flex-direction column; gap 3px; margin-top 4px }
-        # .status-item { font-size: 14px; font-weight: 700 }
         status_grid = QGridLayout()
-        status_grid.setSpacing(8)
-        status_grid.setContentsMargins(0, 4, 0, 0)
-        
+        status_grid.setSpacing(4)
+        status_grid.setContentsMargins(0, 0, 0, 0)
+        status_grid.setColumnStretch(0, 1)
+        status_grid.setColumnStretch(1, 0)
+
         self.status_eeg = QLabel("EEG - Standby")
         self.status_eeg.setStyleSheet(T.status_text("off"))
         self.connect_eeg_btn = QPushButton("Conectar")
         self.connect_eeg_btn.setStyleSheet(connect_sm)
         self.connect_eeg_btn.clicked.connect(self.toggle_eeg_connection)
-        
+
         self.status_vr = QLabel("VR - Standby")
         self.status_vr.setStyleSheet(T.status_text("off"))
         self.connect_vr_btn = QPushButton("Conectar")
         self.connect_vr_btn.setStyleSheet(connect_sm)
         self.connect_vr_btn.clicked.connect(self.toggle_udp_server)
-        
+
         self.status_ortese = QLabel("ORTESE - Standby")
         self.status_ortese.setStyleSheet(T.status_text("off"))
         self.connect_ortese_btn = QPushButton("Conectar")
         self.connect_ortese_btn.setStyleSheet(connect_sm)
         self.connect_ortese_btn.clicked.connect(self.toggle_esp32_connection)
-        
+
         status_grid.addWidget(self.status_eeg, 0, 0)
         status_grid.addWidget(self.connect_eeg_btn, 0, 1)
         status_grid.addWidget(self.status_vr, 1, 0)
         status_grid.addWidget(self.connect_vr_btn, 1, 1)
         status_grid.addWidget(self.status_ortese, 2, 0)
         status_grid.addWidget(self.connect_ortese_btn, 2, 1)
-        
-        col_center.addLayout(status_grid)
-        col_center.addStretch()
-        top_layout.addLayout(col_center, 1)
-        top_layout.addWidget(self._v_separator())
+        c2.addLayout(status_grid)
+        cards_row.addWidget(card2, 1)
 
-        # ---- COL RIGHT ----
-        # Internamente: .right-panel-top { display flex; align-items flex-start; justify-content space-between }
-        col_right = QVBoxLayout()
-        col_right.setSpacing(8)
-
-        right_top = QHBoxLayout()
-        right_top.setSpacing(16)
-
-        # .right-panel-content { flex-direction column; gap 6px }
-        grav_col = QVBoxLayout()
-        grav_col.setSpacing(6)
-
-        # .gravacao-title { font-size: 18px; font-weight: 800 }
-        gravacao_title = QLabel("Gravação")
-        gravacao_title.setStyleSheet(subtitle_18)
-        grav_col.addWidget(gravacao_title)
-
-        # .gravacao-row { display flex; align-items center; gap 8px }
-        pac_row = QHBoxLayout()
-        pac_row.setSpacing(8)
-        # .gravacao-label { font-size: 14px; font-weight: 700 }
-        pac_label = QLabel("Paciente")
-        pac_label.setStyleSheet(T.status_text("default") + " font-size: 14px;")
-        self.patient_combo = QComboBox()
-        self.patient_combo.setStyleSheet(combo_style)
-        self.patient_combo.setMaximumWidth(100)
-        self.patient_combo.currentTextChanged.connect(self._on_patient_changed)
-        pac_row.addWidget(pac_label)
-        pac_row.addWidget(self.patient_combo)
-        grav_col.addLayout(pac_row)
-
-        # button.btn.btn-atualizar: padding 5px 14px, font-size 12px
-        self.refresh_patients_btn = QPushButton("Atualizar")
-        self.refresh_patients_btn.setStyleSheet(T.btn_default("5px 14px", "12px", "600"))
-        self.refresh_patients_btn.clicked.connect(self.refresh_patients)
-        grav_col.addWidget(self.refresh_patients_btn)
-
-        # .gravacao-actions { display flex; align-items center; gap 10px; margin-top 2px }
-        grav_actions = QHBoxLayout()
-        grav_actions.setSpacing(10)
-        grav_actions.setContentsMargins(0, 2, 0, 0)
-        # button.btn.btn-green: font-size 12px, padding 5px 14px
+        # ---- CARD 3: Gravacao ----
+        card3 = QGroupBox("3 · Gravação")
+        c3 = QVBoxLayout(card3)
+        c3.setContentsMargins(8, 6, 8, 6)
+        c3.setSpacing(4)
         self.record_btn = QPushButton("Iniciar Gravação")
-        self.record_btn.setStyleSheet(T.btn_green("5px 14px", "12px", "600"))
+        self.record_btn.setStyleSheet(T.btn_green("5px 10px", "12px", "600"))
         self.record_btn.clicked.connect(self.toggle_recording)
         self.record_btn.setEnabled(False)
         self.gravacao_status = QLabel("Não gravando")
         self.gravacao_status.setStyleSheet(Theme.recording_status_label())
-        self.gravacao_status.setWordWrap(False)
-        grav_actions.addWidget(self.record_btn)
-        grav_actions.addWidget(self.gravacao_status)
-        grav_col.addLayout(grav_actions)
-        right_top.addLayout(grav_col)
+        self.gravacao_status.setWordWrap(True)
+        self.session_timer_label = QLabel("Sessão: 00:00:00")
+        self.session_timer_label.setStyleSheet(T.section_title("13px"))
+        c3.addWidget(self.record_btn)
+        c3.addWidget(self.gravacao_status)
+        c3.addWidget(self.session_timer_label)
+        cards_row.addWidget(card3, 1)
 
-        # Hands + IA Table — .right-side-panel { flex-direction column; align-items flex-end; gap 6px }
-        ia_col = QVBoxLayout()
-        ia_col.setSpacing(4)
-        ia_col.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(cards_row)
 
-        # .hand-icons { display flex; gap 16px (style override: gap 24px); justify-content center }
-        # .hand-icon { font-size: 32px; filter drop-shadow }
-        hands_row = QHBoxLayout()
-        hands_row.setSpacing(24)
-        hands_row.addStretch()
-        hand_left = QLabel("✋")
-        # .hand-icon.left { color: #f6ad55 }
-        hand_left.setStyleSheet(f"font-size: 32px; color: {T.ORANGE}; background: transparent;")
-        hand_right = QLabel("🤚")
-        hand_right.setStyleSheet(f"font-size: 32px; color: {T.LIGHT_BLUE}; background: transparent;")
-        hands_row.addWidget(hand_left)
-        hands_row.addWidget(hand_right)
-        hands_row.addStretch()
-        ia_col.addLayout(hands_row)
+        # ================= SIDEBAR (largura fixa, sem scroll) =================
+        side_panel = QWidget()
+        side_panel.setFixedWidth(T.SIDEBAR_WIDTH)
+        side_layout = QVBoxLayout(side_panel)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(6)
 
-        # .ia-table-area: grid com .ia-row grid-template-columns 80px 40px 40px
-        # .ia-cell { padding 4px 6px; font-size 13px; font-weight 700 }
-        # .ia-cell-label { justify-content flex-end; padding-right 10px }
-        # .dot { width 14px; height 14px; border-radius 50%; background #2d3748 }
-        # .acertos-label { color: #f6ad55; font-weight: 800 }
-        # .acerto-val { font-size: 18px; font-weight: 800 }
-        ia_table = QGridLayout()
-        ia_table.setSpacing(0)
-        ia_table.setContentsMargins(0, 4, 0, 0)
-        ia_table.setColumnMinimumWidth(0, 80)
-        ia_table.setColumnMinimumWidth(1, 40)
-        ia_table.setColumnMinimumWidth(2, 40)
+        # ---- CARD 4: IA / Resultado ----
+        model_group = QGroupBox("4 · IA / Resultado")
+        model_layout = QVBoxLayout(model_group)
+        model_layout.setContentsMargins(8, 6, 8, 6)
+        model_layout.setSpacing(3)
 
-        DOT_INACTIVE = "●"
-        dot_style      = f"color: {T.BTN_DARK}; font-size: 14px; background: transparent;"
-        label_style    = (
-            f"color: {T.WHITE}; font-size: 13px; font-weight: 700; "
-            "padding: 4px 10px 4px 6px; background: transparent;"
-        )
-        acertos_style  = (
-            f"color: {T.ORANGE}; font-size: 13px; font-weight: 800; "
-            "padding: 4px 10px 4px 6px; background: transparent;"
-        )
-        cell_style     = (
-            "font-size: 13px; font-weight: 700; border: 1px solid rgba(74, 85, 104, 0.3); "
-            "padding: 4px 6px; background: transparent;"
-        )
-        val_style      = (
-            f"color: {T.WHITE}; font-size: 18px; font-weight: 800; "
-            "border: 1px solid rgba(74, 85, 104, 0.3); padding: 4px 6px; background: transparent;"
-        )
+        self.free_result_label = QLabel("Livre: aguardando EEG")
+        self.free_result_label.setStyleSheet(
+            "font-size: 19px; font-weight: 800; padding: 2px;")
+        self.free_result_label.setWordWrap(True)
+        model_layout.addWidget(self.free_result_label)
 
-        table_rows = [
-            ("IA",       label_style,   DOT_INACTIVE, dot_style + cell_style, DOT_INACTIVE, dot_style + cell_style),
-            ("Paciente", label_style,   DOT_INACTIVE, dot_style + cell_style, DOT_INACTIVE, dot_style + cell_style),
-            ("Tarefa",   label_style,   DOT_INACTIVE, dot_style + cell_style, DOT_INACTIVE, dot_style + cell_style),
-            ("Acertos",  acertos_style, "0",          val_style,              "0",          val_style),
-        ]
-        self.ia_table_cells = {}
-        for r, (name, ls, v1, v1s, v2, v2s) in enumerate(table_rows):
-            lbl = QLabel(name)
-            lbl.setStyleSheet(ls)
-            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            c1 = QLabel(v1)
-            c1.setStyleSheet(v1s)
-            c1.setAlignment(Qt.AlignCenter)
-            c2 = QLabel(v2)
-            c2.setStyleSheet(v2s)
-            c2.setAlignment(Qt.AlignCenter)
-            ia_table.addWidget(lbl, r, 0)
-            ia_table.addWidget(c1, r, 1)
-            ia_table.addWidget(c2, r, 2)
-            self.ia_table_cells[name] = (lbl, c1, c2)
+        self.prediction_label = QLabel("")
+        self.prediction_label.setWordWrap(True)
+        model_layout.addWidget(self.prediction_label)
 
-        ia_col.addLayout(ia_table)
-        ia_col.addStretch()
-        right_top.addLayout(ia_col)
+        probs_row = QHBoxLayout()
+        probs_row.setSpacing(4)
+        self.prob_left_label = QLabel("")
+        self.prob_left_label.setWordWrap(True)
+        self.prob_left_label.setStyleSheet("font-size: 11px;")
+        self.prob_right_label = QLabel("")
+        self.prob_right_label.setWordWrap(True)
+        self.prob_right_label.setStyleSheet("font-size: 11px;")
+        probs_row.addWidget(self.prob_left_label, 1)
+        probs_row.addWidget(self.prob_right_label, 1)
+        model_layout.addLayout(probs_row)
 
-        col_right.addLayout(right_top)
-        col_right.addStretch()
-        top_layout.addLayout(col_right, 1)
+        self.accuracy_label = QLabel("Acurácia: 0% (0/0)")
+        self.accuracy_label.setWordWrap(True)
+        model_layout.addWidget(self.accuracy_label)
 
-        top_container.setLayout(top_layout)
-        layout.addWidget(top_container)
+        self.ai_status_label = QLabel("")
+        self.ai_status_label.setWordWrap(True)
+        model_layout.addWidget(self.ai_status_label)
 
-        # ============ MARCADORES BAR ============
-        marcadores_bar = QWidget()
-        marcadores_bar.setStyleSheet(T.marcadores_bar())
-        marc_layout = QHBoxLayout()
-        marc_layout.setContentsMargins(20, 12, 20, 12)
+        model_row = QHBoxLayout()
+        model_row.setSpacing(4)
+        self.model_status_label = QLabel("Sem modelo")
+        self.model_status_label.setWordWrap(True)
+        self.model_status_label.setStyleSheet("font-size: 11px;")
+        self.free_model_btn = QPushButton("Modelo")
+        self.free_model_btn.setToolTip(
+            "Carrega o modelo generalizado mais recente (treino opcional).")
+        self.free_model_btn.clicked.connect(self.load_model)
+        model_row.addWidget(self.model_status_label, 1)
+        model_row.addWidget(self.free_model_btn, 0)
+        model_layout.addLayout(model_row)
 
-        self.marcador_text = QLabel("Marcadores -  T1: 0  |  T2: 0")
-        self.marcador_text.setStyleSheet(subtitle_18)
-        marc_layout.addWidget(self.marcador_text)
-        marc_layout.addStretch()
+        opts_row = QHBoxLayout()
+        opts_row.setSpacing(4)
+        self.free_vr_checkbox = QCheckBox("VR")
+        self.free_vr_checkbox.setToolTip("Espelhar resultado no VR (opcional)")
+        self.free_vr_checkbox.setChecked(True)
+        self.free_ortese_checkbox = QCheckBox("Órtese")
+        self.free_ortese_checkbox.setToolTip("Acionar órtese (opcional)")
+        self.free_ortese_checkbox.setChecked(True)
+        self.ia_live_label = QLabel("Esq 0 · Dir 0")
+        self.ia_live_label.setStyleSheet(
+            f"font-size: 11px; font-weight: 800; color: {T.ORANGE}; background: transparent;")
+        self.ia_live_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        opts_row.addWidget(self.free_vr_checkbox, 0)
+        opts_row.addWidget(self.free_ortese_checkbox, 0)
+        opts_row.addWidget(self.ia_live_label, 1)
+        model_layout.addLayout(opts_row)
 
-        teste_label = QLabel("Teste Manual")
-        teste_label.setStyleSheet(subtitle_16)
-        marc_layout.addWidget(teste_label)
-        marc_layout.addSpacing(12)
+        self.rl_status_label = QLabel("RL: desligado")
+        self.rl_status_label.setWordWrap(True)
+        self.rl_status_label.setStyleSheet("font-size: 11px;")
+        model_layout.addWidget(self.rl_status_label)
 
+        rl_row = QHBoxLayout()
+        rl_row.setSpacing(4)
+        self.rl_correct_btn = QPushButton("✓ Acertou")
+        self.rl_correct_btn.setToolTip("Marca a última predição como correta (recompensa).")
+        self.rl_correct_btn.clicked.connect(lambda: self.rl_feedback(True))
+        self.rl_wrong_btn = QPushButton("✗ Errou")
+        self.rl_wrong_btn.setToolTip("Marca a última predição como errada (a outra classe vira o rótulo).")
+        self.rl_wrong_btn.clicked.connect(lambda: self.rl_feedback(False))
+        self.rl_restore_btn = QPushButton("↺ Base")
+        self.rl_restore_btn.setToolTip("Restaurar base: desfaz updates de RL da sessão (trava anti-drift).")
+        self.rl_restore_btn.clicked.connect(self._rl_restore_base)
+        rl_row.addWidget(self.rl_correct_btn, 1)
+        rl_row.addWidget(self.rl_wrong_btn, 1)
+        rl_row.addWidget(self.rl_restore_btn, 1)
+        model_layout.addLayout(rl_row)
+        side_layout.addWidget(model_group)
+
+        # ---- CARD 5: Marcadores ----
+        marc_group = QGroupBox("Marcadores")
+        marc_layout = QHBoxLayout(marc_group)
+        marc_layout.setContentsMargins(8, 6, 8, 6)
+        marc_layout.setSpacing(4)
+        self.marcador_text = QLabel("T1: 0 | T2: 0")
+        self.marcador_text.setStyleSheet(T.section_title("13px"))
         self.t1_btn = QPushButton("T1")
-        self.t1_btn.setStyleSheet(T.btn_dark())
+        self.t1_btn.setStyleSheet(T.btn_dark("4px 8px", "12px", "700"))
         self.t1_btn.clicked.connect(lambda: self.add_marker("T1"))
         self.t2_btn = QPushButton("T2")
-        self.t2_btn.setStyleSheet(T.btn_blue())
+        self.t2_btn.setStyleSheet(T.btn_blue("4px 8px", "12px", "700"))
         self.t2_btn.clicked.connect(lambda: self.add_marker("T2"))
-        marc_layout.addWidget(self.t1_btn)
-        marc_layout.addSpacing(8)
-        marc_layout.addWidget(self.t2_btn)
+        marc_layout.addWidget(self.marcador_text, 1)
+        marc_layout.addWidget(self.t1_btn, 0)
+        marc_layout.addWidget(self.t2_btn, 0)
+        side_layout.addWidget(marc_group)
+        side_layout.addStretch(1)
 
-        marcadores_bar.setLayout(marc_layout)
-        layout.addWidget(marcadores_bar)
+        # Placar vivo no lugar da tabela estatica (atualizado em _apply_game_stats).
 
-        # ============ BCI STATUS ============
+        # ============ EEG AO VIVO (expansivel) ============
         self.bci_status_label = QLabel("Sistema BCI inicializado")
-        self.bci_status_label.setStyleSheet(bci_status)
-        self.bci_status_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.bci_status_label)
+        self.bci_status_label.setStyleSheet(T.status_text("connected"))
+        self.bci_status_label.setWordWrap(True)
 
-        # ============ EEG CHART ============
         self.plot_widget = EEGPlotWidget()
-        self.plot_widget.setMinimumHeight(300)
-        layout.addWidget(self.plot_widget)
+        self.plot_widget.setMinimumSize(200, 120)
+        self.plot_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # ============ SESSION TIMER ============
-        self.session_timer_label = QLabel("Sessão: 00:00:00")
-        self.session_timer_label.setStyleSheet(session_timer)
-        self.session_timer_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.session_timer_label)
+        plot_panel = QWidget()
+        plot_layout = QVBoxLayout(plot_panel)
+        plot_layout.setContentsMargins(0, 0, 0, 0)
+        plot_layout.setSpacing(4)
+        plot_heading = QLabel("EEG AO VIVO  |  16 canais  |  125 Hz")
+        plot_heading.setStyleSheet(T.section_title("13px"))
+        plot_heading.setWordWrap(True)
+        plot_layout.addWidget(plot_heading)
+        plot_layout.addWidget(self.plot_widget, 1)
+        plot_layout.addWidget(self.bci_status_label)
+
+        self.workspace_splitter = QSplitter(Qt.Horizontal)
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.setHandleWidth(6)
+        self.workspace_splitter.addWidget(plot_panel)
+        self.workspace_splitter.addWidget(side_panel)
+        self.workspace_splitter.setStretchFactor(0, 1)
+        self.workspace_splitter.setStretchFactor(1, 0)
+        self.workspace_splitter.setSizes([1000, T.SIDEBAR_WIDTH])
+        layout.addWidget(self.workspace_splitter, 1)
 
         self.setLayout(layout)
 
@@ -688,10 +959,10 @@ class StreamingWidget(QWidget):
 
         # task_combo interno (não visível) para compatibilidade com on_task_changed
         self.task_combo = QComboBox()
-        self.task_combo.addItems(["Baseline", "Treino", "Teste", "Jogo"])
+        self.task_combo.addItems(["Baseline", "Treino", "Teste", "Jogo", "Livre"])
         self.task_combo.currentTextChanged.connect(self.on_task_changed)
 
-        # Game mode labels (ocultos, para compatibilidade)
+        # Game mode labels (ocultos, para compatibilidade com presenters)
         self.accuracy_details_label = QLabel("")
         self.accuracy_group = QWidget()
         self.status_table_group = QWidget()
@@ -702,12 +973,14 @@ class StreamingWidget(QWidget):
         self.confidence_label = QLabel("0%")
         self.stats_group = QWidget()
         self.game_group = QWidget()
-        self.prediction_label = QLabel("")
-        self.prob_left_label = QLabel("")
-        self.prob_right_label = QLabel("")
-        self.model_status_label = QLabel("")
-        self.accuracy_label = QLabel("Acurácia: 0% (0/0)")
-        self.ai_status_label = QLabel("")
+        # Os labels visiveis (prediction/probs/model/accuracy/ai/free/rl) ja
+        # foram criados na sidebar acima; aqui so os contadores ocultos.
+
+        # Internal presenter targets must not become independent top-level windows.
+        for group in (self.accuracy_group, self.status_table_group,
+                      self.stats_group, self.game_group):
+            group.setParent(self)
+            group.setMaximumSize(0, 0)
 
         # Inicializar UDP auto-send checkboxes (para compatibilidade)
         self.udp_auto_send_checkbox = QCheckBox()
@@ -743,14 +1016,44 @@ class StreamingWidget(QWidget):
     def _on_patient_changed(self, text):
         """Atualiza o label de paciente quando muda no combo"""
         if text and text != "Selecionar paciente...":
-            self.patient_display_label.setText(f"Paciente: {text}")
+            try:
+                patient_id = self.patient_combo.currentData()
+                count = self._patient_session_count(int(patient_id)) if patient_id else 0
+                self.patient_display_label.setText(
+                    f"Paciente: {text} ({ProgressionPresenter.summary_text(count)})"
+                )
+            except Exception:
+                self.patient_display_label.setText(f"Paciente: {text}")
         else:
             self.patient_display_label.setText("Paciente: ####")
+
+    def _patient_calibrated(self, patient_id) -> bool:
+        """True se o paciente ja tem modelo proprio (calibracao feita)."""
+        try:
+            return bool(self.training_controller.patient_model_available(int(patient_id)))
+        except Exception:
+            return False
+
+    def _count_trials_or_zero(self, csv_path) -> int:
+        try:
+            from brainbridge_v2.infrastructure.ml.trainer import (
+                count_labeled_trials_total)
+            return int(count_labeled_trials_total(str(csv_path)))
+        except Exception as exc:
+            print(f"[CALIB] Falha ao contar trials: {exc}")
+            return 0
+
+    def _patient_session_count(self, patient_id: int) -> int:
+        """Quantas gravações/sessões o paciente já possui (progressão)."""
+        try:
+            return max(0, len(self.recording_controller.list_patient_recordings(int(patient_id))))
+        except Exception:
+            return 0
 
     def _update_marcador_text(self):
         """Atualiza o texto dos marcadores na barra"""
         self.marcador_text.setText(
-            f"Marcadores -  T1: {self.streaming_state.t1_count}  |  T2: {self.streaming_state.t2_count}"
+            f"T1: {self.streaming_state.t1_count} | T2: {self.streaming_state.t2_count}"
         )
 
     def _update_marker_labels(self, state: MarkerStateViewModel):
@@ -801,8 +1104,16 @@ class StreamingWidget(QWidget):
     def _recording_status_text(self, hint: str = "") -> str:
         task = self.task_combo.currentText()
         if not self.is_recording:
+            if task == "Livre" and getattr(self, "free_running", False):
+                base = "Livre ao vivo"
+                return f"{base} · {hint}" if hint else base
             return "Não gravando"
-        base = "Jogando" if task == "Jogo" else "Gravando"
+        if task == "Jogo":
+            base = "Jogando"
+        elif task == "Livre":
+            base = "Livre gravando"
+        else:
+            base = "Gravando"
         if hint:
             return f"{base} · {hint}"
         return base
@@ -821,6 +1132,12 @@ class StreamingWidget(QWidget):
             self.gravacao_status.setStyleSheet(Theme.recording_status_label())
 
     def _apply_task_view_state(self):
+        for button, task in ((self.btn_baseline, "Baseline"),
+                             (self.btn_iniciar_treino, "Treino"),
+                             (self.btn_jogo, "Jogo"),
+                             (self.btn_livre, "Livre")):
+            button.setCheckable(True)
+            button.setChecked(self.task_combo.currentText() == task)
         task_view = TaskViewStatePresenter.present(
             self.task_combo.currentText(),
             self.is_recording,
@@ -851,6 +1168,13 @@ class StreamingWidget(QWidget):
         self.prediction_label.setStyleSheet(prediction_view.prediction_style_sheet)
         self.prob_left_label.setText(prediction_view.left_probability_text)
         self.prob_right_label.setText(prediction_view.right_probability_text)
+        if hasattr(self, "free_result_label"):
+            if prediction is None:
+                self.free_result_label.setText("Livre: aguardando EEG")
+            else:
+                side = "ESQUERDA" if int(prediction.predicted_index) == 0 else "DIREITA"
+                conf = float(prediction.confidence)
+                self.free_result_label.setText(f"Livre: {side} ({conf:.0%})")
 
     def _apply_game_stats(self):
         stats_view = GameRuntimePresenter.present_stats(self.predictions)
@@ -859,6 +1183,13 @@ class StreamingWidget(QWidget):
         self.right_predictions_label.setText(stats_view.right_predictions_text)
         self.transitions_label.setText(stats_view.transitions_text)
         self.confidence_label.setText(stats_view.confidence_text)
+        if hasattr(self, "ia_live_label"):
+            try:
+                left = sum(1 for _, p, _ in self.predictions if p == 0)
+                right = sum(1 for _, p, _ in self.predictions if p == 1)
+                self.ia_live_label.setText(f"Esq {left} · Dir {right}")
+            except Exception:
+                pass
         
     def refresh_patients(self):
         """Atualiza a lista de pacientes"""
@@ -868,8 +1199,9 @@ class StreamingWidget(QWidget):
         try:
             patients = self.patient_controller.list_patients()
             for patient in patients:
+                count = self._patient_session_count(patient['id'])
                 self.patient_combo.addItem(
-                    f"{patient['name']} (ID: {patient['id']})",
+                    f"{patient['name']} (ID: {patient['id']}) - {count} sessões",
                     patient['id']
                 )
         except Exception as e:
@@ -954,6 +1286,9 @@ class StreamingWidget(QWidget):
     
     def manual_esp32_test(self, direction):
         """Teste manual do envio serial para ESP32"""
+        # Manual/debug entry points obey the same gate, never synthesize predictions.
+        if not self._authorize_transport(direction, "serial"):
+            return False
         if self.esp32_connected:
             success = self.esp32_controller.send_direction(direction)
             
@@ -967,7 +1302,7 @@ class StreamingWidget(QWidget):
     
     def send_esp32_signal(self, direction):
         """Envia sinal serial para ESP32 se conectado e o envio automático estiver habilitado"""
-        if self.esp32_connected and self.esp32_auto_send_checkbox.isChecked():
+        if self.esp32_connected and self.esp32_auto_send_checkbox.isChecked() and self._authorize_transport(direction, "serial"):
             success = self.esp32_controller.send_direction(direction)
             
             if not success:
@@ -1021,6 +1356,8 @@ class StreamingWidget(QWidget):
     
     def manual_udp_test(self, direction):
         """Teste manual do envio UDP"""
+        if not self._authorize_transport(direction, "unity"):
+            return False
         if self.udp_server_active:
             success = self.unity_controller.send_action(direction)
             if success:
@@ -1033,7 +1370,7 @@ class StreamingWidget(QWidget):
     
     def send_udp_signal(self, direction):
         """Envia sinal UDP se o servidor estiver ativo e o envio automático estiver habilitado"""
-        if self.udp_server_active and self.udp_auto_send_checkbox.isChecked():
+        if self.udp_server_active and self.udp_auto_send_checkbox.isChecked() and self._authorize_transport(direction, "unity"):
             success = self.unity_controller.send_action(direction)
             if not success:
                 print(f"Falha ao enviar sinal UDP para {direction}")
@@ -1089,8 +1426,37 @@ class StreamingWidget(QWidget):
             
             # Obter tarefa do dropdown
             task = self.task_combo.currentText().lower().replace(" ", "_")  # ex: "Baseline" -> "baseline"
+            self._reset_ai_prediction_window()
+            self.session_affected_hand = None
+            try:
+                patient = next((p for p in self.patient_controller.list_patients()
+                                if p['id'] == selected_patient_id), {})
+                self.session_affected_hand = patient.get("affected_hand")
+            except Exception:
+                pass  # Fail closed; recording without movement remains available.
+            if task == "jogo" and self.session_affected_hand not in ("left", "right"):
+                QMessageBox.warning(self, "Cadastro incompleto", "Cadastre a mao afetada do paciente (esquerda/direita) antes de iniciar o jogo.")
+                return
+
+            # Calibracao obrigatoria (1x por paciente) p/ Jogo e Livre:
+            # sem modelo proprio do paciente, oferece o Treino de calibracao.
+            if task in ("jogo", "livre") and not self._patient_calibrated(selected_patient_id):
+                try:
+                    required = int(get_runtime("calib_trials_required", 10))
+                except Exception:
+                    required = 10
+                answer = QMessageBox.question(
+                    self, "Calibração necessária",
+                    f"Paciente sem modelo próprio.\n\n"
+                    f"Grave um Treino de calibração com pelo menos {required} trials "
+                    f"(T1/T2) para liberar o modo {self.task_combo.currentText()}.\n\n"
+                    f"Iniciar Treino agora?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                if answer == QMessageBox.Yes:
+                    self._set_task("Treino")
+                return
             
-            # Verificar se é modo jogo
+            # Verificar se é modo jogo (VR obrigatorio no fluxo classico)
             if task == "jogo":
                 if not self.inference_controller.has_loaded_model():
                     if not self.load_model():
@@ -1100,31 +1466,39 @@ class StreamingWidget(QWidget):
                 self._reset_ai_prediction_window()
                 self._apply_prediction_display()
                 self._apply_game_stats()
-                
+
                 # Resetar dados de acurácia
                 self.reset_accuracy_data()
-                
+
                 # Resetar controle de resposta
                 self.waiting_for_response = False
-                
+
                 # Resetar status visual da IA
                 self._set_ai_status("waiting_task")
-                
+
                 # Resetar contadores de ações no início da gravação
                 self.reset_action_counters()
-                
+
                 # Iniciar UDP receiver para acurácia - agora sempre disponível
                 try:
                     self.start_accuracy_udp_receiver()
                 except Exception as e:
                     print(f"Erro ao iniciar UDP receiver de acurácia: {e}")
-                
+
                 # Iniciar primeiro sinal aleatório imediatamente (não usar timer automático)
                 # O próximo sinal será enviado apenas após receber CORRECT/WRONG
-                QTimer.singleShot(1000, self.send_next_random_signal)  # Aguardar 1 segundo para inicializar
-                
+                self._schedule_game_callback(1000, self.send_next_random_signal)
+
                 # Manter timer como fallback caso não receba resposta (usar game_action_interval)
-                self.game_action_timer.start(self.game_action_interval)
+                self._arm_game_fallback()
+
+            # Modo Livre: treinamento/modelo opcional, VR/ortese opcionais.
+            if task == "livre":
+                self.free_predictions.clear()
+                self.predictions.clear()
+                self._apply_prediction_display()
+                self._start_free_run()
+                self._apply_recording_ui(hint="Livre")
             
             try:
                 # Usar logger OpenBCI se disponível
@@ -1171,13 +1545,34 @@ class StreamingWidget(QWidget):
                 self._refresh_streaming_state(session=started_session)
                 
                 # =====================================================================
-                # ENVIAR TRIGGER PARA ATIVAR A TAREFA NO VR
+                # PUBLICAR SESSÃO REAL NO VR + TRIGGER
+                # Publica nome/lado/tarefa reais (antes ia sempre debug João/Esquerdo).
+                # O VR precisa enviar "Confirm" para liberar o trigger (READY).
                 # =====================================================================
                 try:
                     if self.unity_controller.is_server_active() and self.unity_controller.is_client_connected():
+                        lado_vr = "Esquerdo" if (self.session_affected_hand or "left") == "left" else "Direito"
+                        # Progressão: nível deriva das sessões já realizadas (0-11).
+                        # Conta antes desta gravação para não contar a sessão atual.
+                        try:
+                            previous_count = max(0, len(
+                                self.recording_controller.list_patient_recordings(selected_patient_id)
+                            ) - 1)
+                        except Exception:
+                            previous_count = 0
+                        nivel_vr = ProgressionPresenter.level_for_session_count(previous_count)
+                        try:
+                            self.unity_controller.set_pending_session(
+                                patient_name, nivel_vr, lado_vr, task, previous_count
+                            )
+                            print(f"[GRAVAÇÃO] sessão VR publicada: {patient_name} / {lado_vr} / {task} / nível {nivel_vr} ({previous_count} sessões)", flush=True)
+                        except Exception as e:
+                            print(f"[GRAVAÇÃO] Erro ao publicar sessão VR: {e}", flush=True)
                         time.sleep(0.5)  # Pequeno delay para garantir que tudo está pronto
-                        self.unity_controller.send_trigger()
-                        print(f"[GRAVAÇÃO] send_trigger() enviado para VR", flush=True)
+                        if not self.unity_controller.send_trigger():
+                            print("[GRAVAÇÃO] trigger VR pendente (aguardando Confirm do VR)", flush=True)
+                        else:
+                            print("[GRAVAÇÃO] send_trigger() enviado para VR", flush=True)
                 except Exception as e:
                     print(f"[GRAVAÇÃO] Erro ao enviar send_trigger(): {e}", flush=True)
                 # =====================================================================
@@ -1186,8 +1581,12 @@ class StreamingWidget(QWidget):
                 self.session_timer.start(1000)  # Atualizar a cada segundo
                 
             except Exception as e:
+                self.is_recording = False
+                self._reset_ai_prediction_window()
+                self.game_action_timer.stop()
                 QMessageBox.critical(self, "Erro", f"Erro ao iniciar gravação: {e}")
         else:
+            self._reset_ai_prediction_window()
             # Parar gravação
             # Parar logging, mas manter referência para obter o caminho do arquivo
             logger = None
@@ -1231,12 +1630,17 @@ class StreamingWidget(QWidget):
             
             # Resetar controle de resposta
             self.waiting_for_response = False
-            
-            # Resetar controle de IA
+
+            # Resetar controle de IA (modo Jogo). Modo Livre continua ao vivo.
             self._reset_ai_prediction_window()
-            
+
             # Resetar status visual da IA
-            self._set_ai_status("stopped")
+            if current_task == "Livre":
+                # Mantem o loop livre rodando para ver resposta em tela sem gravar.
+                self._start_free_run()
+            else:
+                self._stop_free_run()
+                self._set_ai_status("stopped")
             
             # Resetar contadores de ações
             self.reset_action_counters()
@@ -1258,6 +1662,11 @@ class StreamingWidget(QWidget):
             # Parar timer de sessão
             self.session_timer.stop()
             self.session_elapsed_seconds = 0
+            # Atualizar progressão exibida (a sessão recém-gravada conta agora)
+            try:
+                self._on_patient_changed(self.patient_combo.currentText())
+            except Exception:
+                pass
             self.update_session_timer()
 
             current_session = self._get_current_session()
@@ -1292,6 +1701,24 @@ class StreamingWidget(QWidget):
                 
                 print(f"[DEBUG] stop_recording: csv_file_path={csv_file_path}")
                 if csv_file_path and os.path.exists(csv_file_path):
+                    # Calibracao exige N trials rotulados (configuravel).
+                    try:
+                        required = int(get_runtime("calib_trials_required", 10))
+                    except Exception:
+                        required = 10
+                    n_trials = self._count_trials_or_zero(csv_file_path)
+                    print(f"[CALIB] trials rotulados: {n_trials} (minimo {required})")
+                    if n_trials < required:
+                        answer = QMessageBox.question(
+                            self, "Calibração insuficiente",
+                            f"Sessão com {n_trials} trials rotulados (mínimo {required}).\n\n"
+                            f"Treinar assim mesmo?",
+                            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                        if answer != QMessageBox.Yes:
+                            QMessageBox.information(
+                                self, "Calibração",
+                                "Treino descartado para calibração. Grave novamente com mais trials.")
+                            return
                     # Iniciar fluxo automático de treino sem pedir confirmação
                     # show_training_dialog agora suporta auto_start=True
                     try:
@@ -1311,7 +1738,7 @@ class StreamingWidget(QWidget):
 
     def game_random_action(self):
         """Executa uma ação aleatória no jogo (fallback caso não receba resposta)"""
-        if self.is_recording and self.csv_logger:
+        if self.is_recording and self.csv_logger and self._is_game_mode():
             # Verificar se não está aguardando resposta
             if self.waiting_for_response:
                 print("⚠️  Timeout: Não recebeu resposta CORRECT/WRONG, enviando sinal de fallback")
@@ -1332,11 +1759,10 @@ class StreamingWidget(QWidget):
                 source="fallback",
                 window_size=self.window_size,
             )
-            self._start_ai_prediction_window("active_fallback", source="fallback")
 
     def send_next_random_signal(self):
         """Envia o próximo sinal aleatório após receber resposta"""
-        if self.is_recording and self.csv_logger:
+        if self.is_recording and self.csv_logger and self._is_game_mode():
             print("🎲 Enviando próximo sinal aleatório")
             import random
             actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
@@ -1352,7 +1778,6 @@ class StreamingWidget(QWidget):
                 source="random",
                 window_size=self.window_size,
             )
-            self._start_ai_prediction_window("active_window")
 
     def _start_ai_prediction_window(self, status: str, source: str = ""):
         """
@@ -1361,7 +1786,11 @@ class StreamingWidget(QWidget):
         A predicao so pode acontecer depois que window_size amostras novas
         chegarem a partir do marcador enviado para Unity em add_marker().
         """
-        self.game_inference.start_window(started_at_ms=time.time() * 1000)
+        generation = self.game_inference.start_window(
+            started_at_ms=time.monotonic() * 1000, task_hand=self._current_task_hand
+        )
+        self._movement_authorization = None
+        self._movement_sent.clear()
         self._sync_ai_prediction_state()
         self._record_pipeline_event(
             "AI_WINDOW_OPENED",
@@ -1374,11 +1803,14 @@ class StreamingWidget(QWidget):
         print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s{suffix}")
 
         self._set_ai_status(status)
-        QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
+        QTimer.singleShot(self.game_inference.collection_deadline_ms,
+                          lambda: self.close_ai_window(generation))
 
-    def close_ai_window(self):
+    def close_ai_window(self, generation=None):
         """Fecha a janela de IA após o tempo configurado."""
-        self.game_inference.close_window()
+        if not self.game_inference.close_window(generation):
+            return
+        self._movement_authorization = None
         self._sync_ai_prediction_state()
         self._record_pipeline_event(
             "AI_WINDOW_CLOSED",
@@ -1408,8 +1840,11 @@ class StreamingWidget(QWidget):
 
             if result.external_signal and self.udp_server_active:
                 self.unity_controller.send_action(result.external_signal)
-            if result.esp32_direction:
-                self.send_esp32_signal(result.esp32_direction)
+            # A manual cue also replaces the attempt; it never moves the orthosis.
+            if self._is_game_mode():
+                self._current_task_hand = {"T1": "left", "T2": "right"}.get(result.marker_type)
+                self._start_ai_prediction_window("active_window")
+                self._arm_game_fallback()
 
             if USE_OPENBCI_LOGGER:
                 # Marcar para adicionar na próxima amostra
@@ -1424,6 +1859,8 @@ class StreamingWidget(QWidget):
     def start_baseline(self):
         """Inicia o período de baseline"""
         if self.is_recording and self.csv_logger:
+            self._reset_ai_prediction_window()
+            self.game_action_timer.stop()
             baseline_state = self.marker_controller.start_baseline(300)
             if USE_OPENBCI_LOGGER:
                 # Logger OpenBCI
@@ -1479,6 +1916,8 @@ class StreamingWidget(QWidget):
     
     def load_model(self):
         """Carrega modelo CNN para inferência"""
+        if self._inference_job is not None:
+            return False
         try:
             model = self.inference_controller.load_latest_model()
             self._update_model_status(model)
@@ -1502,6 +1941,8 @@ class StreamingWidget(QWidget):
 
         Retorna True se carregado com sucesso, False caso contrário.
         """
+        if self._inference_job is not None:
+            return False
         try:
             model = self.inference_controller.load_model(model_path)
             self._update_model_status(model)
@@ -1530,12 +1971,17 @@ class StreamingWidget(QWidget):
                 f"Aviso: modelo espera {expected_time_steps} timesteps, "
                 f"runtime window_size={self.window_size}. Adaptacao sera aplicada na inferencia."
             )
-            
+        # Se o modo Livre estava sem modelo, promove para rodando.
+        if self._is_free_task_selected() and getattr(self, "free_running", False):
+            self._set_ai_status("free_running")
+        self._update_rl_status()
+
     def update_game_stats(self):
-        """Atualiza estatísticas do jogo"""
-        if not self._is_game_mode():
-            return
-        self._apply_game_stats()
+        """Atualiza estatísticas do jogo/livre"""
+        if self._is_game_mode() or self._is_free_task_selected():
+            self._apply_game_stats()
+        elif self._is_free_mode():
+            self._apply_game_stats()
         
     def process_accuracy_message(self, message):
         """Processa mensagem UDP recebida para cálculo de acurácia"""
@@ -1590,24 +2036,162 @@ class StreamingWidget(QWidget):
         print("Sistema de acurácia parado - callbacks mantidos ativos")
         
     def predict_movement(self, eeg_data):
-        """Faz predição do movimento com o modelo CNN"""
-        if not self._is_game_mode() or not self.inference_controller.has_loaded_model():
+        """Submit at most one prediction; all session decisions stay on Qt."""
+        if self._inference_closed or self._inference_job is not None:
             return
-        if not self.game_inference.is_window_open or self.game_inference.prediction_locked:
+        if not self.is_recording or not self._is_game_mode() or not self.inference_controller.has_loaded_model():
             return
-            
+        generation = self.game_inference.generation
+        if not self.game_inference.claim_prediction(generation):
+            return
+
         try:
-            inference_start = time.perf_counter()
-            prediction = self.inference_controller.predict(eeg_data)
-            inference_latency_ms = (time.perf_counter() - inference_start) * 1000
+            worker = InferenceWorker(self.inference_controller, np.array(eeg_data, copy=True), generation)
+            worker.signals.finished.connect(self._on_inference_finished, Qt.QueuedConnection)
+            self._inference_job = worker
+            self._last_game_window = np.array(eeg_data, copy=True)
+            for name in ("btn_jogo", "btn_iniciar_treino"):
+                if hasattr(self, name):
+                    getattr(self, name).setEnabled(False)
+            self._sync_ai_prediction_state()
+            QThreadPool.globalInstance().start(worker)
+        except Exception as exc:
+            self._on_inference_finished(InferenceOutcome(generation, error=str(exc)))
+
+    def predict_free_movement(self, eeg_data):
+        """Modo Livre: no max 1 job; nao exige gravacao nem resposta do VR."""
+        if getattr(self, "_inference_closed", False):
+            return
+        if not getattr(self, "free_running", False):
+            return
+        if not self.eeg_stream_controller.is_running():
+            return
+        if not self.inference_controller.has_loaded_model():
+            return
+        if getattr(self, "_free_inference_busy", False):
+            return
+        try:
+            window = np.array(eeg_data, copy=True)
+        except Exception:
+            return
+        try:
+            worker = InferenceWorker(self.inference_controller, window,
+                                     -int(self.free_inference.windows_emitted))
+            worker.signals.finished.connect(self._on_free_inference_finished,
+                                            Qt.QueuedConnection)
+            self._free_inference_busy = True
+            self._last_free_window = np.array(window, copy=True)
+            QThreadPool.globalInstance().start(worker)
+        except Exception as exc:
+            self._free_inference_busy = False
+            print(f"[LIVRE] Falha ao enfileirar inferencia: {exc}")
+
+    @pyqtSlot(object)
+    def _on_free_inference_finished(self, outcome):
+        self._free_inference_busy = False
+        if getattr(self, "_inference_closed", False):
+            return
+        if not getattr(self, "free_running", False):
+            return
+        if not self._is_free_task_selected():
+            return
+        if outcome.error is not None:
+            self._record_pipeline_event("FREE_PREDICTION_FAILED",
+                                        error=outcome.error)
+            return
+        try:
+            prediction = outcome.prediction
             pred = int(prediction.predicted_index)
+            conf = float(prediction.confidence)
+            runtime_action = UnityCommandMapper.from_prediction(pred)
+            timestamp = datetime.now()
+            self._apply_prediction_display(prediction)
+            self.free_predictions.append((timestamp, pred, conf))
+            self.predictions.append((timestamp, pred, conf))
+            _fw = getattr(self, "_last_free_window", None)
+            if _fw is not None:
+                self._rl_push_prediction(_fw, pred, conf)
+            self._apply_game_stats()
+            self._record_pipeline_event("FREE_PREDICTION_DONE",
+                                        predicted_index=pred, confidence=conf,
+                                        latency_ms=round(float(outcome.latency_ms), 2))
+            # VR/ortese puramente opcionais, com cooldown + limiar.
+            if self._free_can_send(conf):
+                sent_any = False
+                if getattr(self, "free_vr_checkbox", None) is not None and self.free_vr_checkbox.isChecked():
+                    if self.send_udp_signal_free(runtime_action.direction):
+                        sent_any = True
+                if getattr(self, "free_ortese_checkbox", None) is not None and self.free_ortese_checkbox.isChecked():
+                    if self.send_esp32_signal_free(runtime_action.direction):
+                        sent_any = True
+                if sent_any:
+                    self._free_mark_sent()
+        except Exception as exc:
+            self._record_pipeline_event("FREE_PREDICTION_FAILED", error=str(exc))
+            print(f"[LIVRE] Erro na predicao: {exc}")
+
+    def send_udp_signal_free(self, direction) -> bool:
+        """Envio opcional no modo Livre: so exige VR conectado + checkbox."""
+        try:
+            if not self.udp_server_active:
+                return False
+            if getattr(self, "free_vr_checkbox", None) is not None and not self.free_vr_checkbox.isChecked():
+                return False
+            if self.udp_auto_send_checkbox is not None and not self.udp_auto_send_checkbox.isChecked():
+                return False
+            return bool(self.unity_controller.send_action(direction))
+        except Exception as exc:
+            print(f"[LIVRE] Falha ao enviar UDP: {exc}")
+            return False
+
+    def send_esp32_signal_free(self, direction) -> bool:
+        """Envio opcional no modo Livre: so exige ortese conectada + checkbox."""
+        try:
+            if not getattr(self, "esp32_connected", False):
+                return False
+            if getattr(self, "free_ortese_checkbox", None) is not None and not self.free_ortese_checkbox.isChecked():
+                return False
+            if self.esp32_auto_send_checkbox is not None and not self.esp32_auto_send_checkbox.isChecked():
+                return False
+            return bool(self.esp32_controller.send_direction(direction))
+        except Exception as exc:
+            print(f"[LIVRE] Falha ao enviar ESP32: {exc}")
+            return False
+
+    @pyqtSlot(object)
+    def _on_inference_finished(self, outcome):
+        self._inference_job = None
+        for name in ("btn_jogo", "btn_iniciar_treino"):
+            if hasattr(self, name):
+                getattr(self, name).setEnabled(True)
+        generation = outcome.generation
+        if (self._inference_closed or generation != self.game_inference.generation
+                or not self.game_inference.is_window_open
+                or not self.is_recording or not self._is_game_mode()):
+            return
+        if outcome.error is not None:
+            self.close_ai_window(generation)
+            self._record_pipeline_event("PREDICTION_FAILED", error=outcome.error)
+            return
+        started = self.game_inference.window_started_at_ms
+        if started is not None and time.monotonic() * 1000 - started > self.game_inference.collection_deadline_ms:
+            self.close_ai_window(generation)
+            return
+        try:
+            prediction = outcome.prediction
+            inference_latency_ms = outcome.latency_ms
+            pred = prediction.predicted_index
             runtime_action = UnityCommandMapper.from_prediction(pred)
 
             # Atualizar interface
             timestamp = datetime.now()
             self._apply_prediction_display(prediction)
-            unity_success = self.send_udp_signal(runtime_action.direction)
-            self.send_esp32_signal(runtime_action.direction)
+            self._movement_authorization = (generation, pred, float(prediction.confidence))
+            try:
+                unity_success = self.send_udp_signal(runtime_action.direction)
+                self.send_esp32_signal(runtime_action.direction)
+            finally:
+                self._movement_authorization = None
 
             self.game_inference.mark_prediction_used()
             self._sync_ai_prediction_state()
@@ -1626,8 +2210,13 @@ class StreamingWidget(QWidget):
             
             # Salvar predição
             self.predictions.append((timestamp, pred, float(prediction.confidence)))
+            _gw = getattr(self, "_last_game_window", None)
+            if _gw is not None:
+                self._rl_push_prediction(_gw, pred, float(prediction.confidence))
             
         except Exception as e:
+            self.close_ai_window(generation)
+            self._record_pipeline_event("PREDICTION_FAILED", error=str(e))
             print(f"Erro na predição: {e}")
     
     def on_data_received(self, data):
@@ -1644,9 +2233,11 @@ class StreamingWidget(QWidget):
             self._refresh_streaming_state()
             print(f"[EEG] Conexão confirmada: Primeiro dado recebido ({len(data)} canais)")
 
-        # Enviar para plot
-        self.plot_widget.add_data(data)
-        current_time_seconds = time.time()
+        # Filter only a visual copy; IA and logger must receive raw samples.
+        if not hasattr(self, 'plot_filter'):
+            self.plot_filter = ButterworthFilter(lowcut=0.5, highcut=50.0, fs=125.0, order=6)
+        self.plot_widget.add_data(self.plot_filter.apply_realtime_filter(np.array(data, copy=True)))
+        current_time_seconds = time.monotonic()
         current_time_ms = current_time_seconds * 1000
         try:
             self.pipeline_telemetry.observe_eeg_sample(
@@ -1654,9 +2245,15 @@ class StreamingWidget(QWidget):
             )
         except Exception as exc:
             print(f"[PIPELINE] Falha ao medir taxa EEG: {exc}")
-        
+
+        # Calibracao EA (nao supervisionada, ~30 s): enquanto um modelo com
+        # Euclidean Alignment nao tiver referencia do sujeito, a amostra
+        # alimenta o calibrador e as predicoes aguardam (EEG/gravacao seguem).
+        ea_waiting = self._ea_feed_sample(data)
         # Adicionar ao buffer de dados e verificar predição
-        if self._is_game_mode():
+        if ea_waiting:
+            pass
+        elif self._is_game_mode():
             sample_result = self.game_inference.add_sample(
                 data,
                 now_ms=current_time_ms,
@@ -1700,6 +2297,20 @@ class StreamingWidget(QWidget):
                     )
                     self.game_inference.mark_prediction_used()
                     self._sync_ai_prediction_state()
+        elif self._is_free_task_selected() and getattr(self, "free_running", False):
+            # Modo Livre: loop continuo, sem depender de resposta do VR.
+            try:
+                free_result = self.free_inference.add_sample(data)
+            except Exception as exc:
+                print(f"[LIVRE] Falha no buffer: {exc}")
+                free_result = None
+            if free_result is not None and free_result.status == FreeRunInferenceCoordinator.STATUS_READY:
+                quality = self.eeg_quality_validator.validate(free_result.window)
+                if quality.accepted:
+                    self.predict_free_movement(np.array(free_result.window))
+                else:
+                    self._record_pipeline_event("FREE_WINDOW_REJECTED",
+                                                reason=quality.reason)
                 
         # Enviar para logger se estiver gravando
         if self.is_recording and self.csv_logger:
@@ -1739,6 +2350,12 @@ class StreamingWidget(QWidget):
             
             # Não habilitamos record_btn aqui, esperamos on_data_received
         else:
+            self._reset_ai_prediction_window()
+            try:
+                self.inference_controller.ea_reset()
+            except Exception:
+                pass
+            self.game_action_timer.stop()
             self.eeg_connection_phase = (
                 "standby" if self.disconnection_in_progress else "failed"
             )
@@ -1751,7 +2368,27 @@ class StreamingWidget(QWidget):
 
     def stop_streaming(self):
         """Stops the EEG stream if it is running."""
+        self._reset_ai_prediction_window()
+        try:
+            self._stop_free_run()
+        except Exception:
+            pass
+        self._set_ai_status("stopped")
+        self.game_action_timer.stop()
         self.eeg_stream_controller.disconnect()
+
+    def closeEvent(self, event):
+        # Logical cancellation only. The global pool outlives this widget;
+        # Qt disconnects its receiver automatically if the parent destroys it.
+        self._inference_closed = True
+        self._rl_closed = True
+        self._reset_ai_prediction_window()
+        try:
+            self._stop_free_run()
+        except Exception:
+            pass
+        self.game_action_timer.stop()
+        super().closeEvent(event)
     
     def update_session_timer(self):
         """Atualiza o display do timer de sessão"""
@@ -1779,10 +2416,25 @@ class StreamingWidget(QWidget):
     def on_task_changed(self):
         """Callback chamado quando a tarefa é alterada"""
         task = self.task_combo.currentText()
+        self._reset_ai_prediction_window()
 
         # Resetar contadores de ações sempre que mudar de tarefa
         self.reset_action_counters()
         self._apply_task_view_state()
+
+        # Modo Livre: liga o loop ao selecionar, mesmo sem gravar/modelo.
+        if task == "Livre":
+            if not getattr(self, "free_running", False):
+                self._start_free_run()
+            else:
+                # Atualiza status caso o modelo tenha sido carregado depois.
+                if self.inference_controller.has_loaded_model():
+                    self._set_ai_status("free_running")
+            self._apply_recording_ui(hint="Livre ao vivo")
+            return
+        else:
+            if getattr(self, "free_running", False):
+                self._stop_free_run()
 
         if not self.is_recording:
             if task == "Jogo":
@@ -1818,7 +2470,15 @@ class StreamingWidget(QWidget):
         self._apply_recording_ui()
     
     def _on_unity_message(self, message: str):
+        # Marshal network callbacks to Qt and retain the generation at receipt.
+        self.unity_message_signal.emit(message, self.game_inference.generation)
+
+    def _process_unity_message(self, message: str, generation: int):
         """Callback para mensagens recebidas do Unity"""
+        if generation != self.game_inference.generation:
+            return
+        # Wire responses have no trial ID. Generation rejects queued local work,
+        # but cannot identify a delayed packet first received in a later trial.
         print(f"[Unity] Mensagem recebida: {message}")
         
         # Verificar se recebeu resposta CORRECT ou WRONG
@@ -1829,11 +2489,29 @@ class StreamingWidget(QWidget):
                 message=message,
                 waiting_for_response=bool(self.waiting_for_response),
             )
-            if self.waiting_for_response:
+            # Alimenta a acurácia (1 tentativa por CORRECT/WRONG).
+            try:
+                self.accuracy_message_signal.emit(message)
+            except Exception:
+                pass
+            # Feedback do jogo vale como recompensa p/ a rede (RL).
+            # So aceita quando ha resposta esperada (evita rotular trial errado
+            # com pacote atrasado de trial anterior).
+            try:
+                if self.waiting_for_response:
+                    if "CORRECT" in message:
+                        self.rl_feedback(True, from_vr=True)
+                    elif "WRONG" in message:
+                        self.rl_feedback(False, from_vr=True)
+            except Exception as exc:
+                print(f"[RL] Falha no feedback do VR: {exc}")
+            if self.is_recording and self._is_game_mode() and self.waiting_for_response and self.game_inference.prediction_locked:
                 self.waiting_for_response = False
+                self.close_ai_window(self.game_inference.generation)
                 print("🔓 Liberado para enviar próximo sinal aleatório")
                 # Aguardar 7 segundos antes do próximo sinal
-                QTimer.singleShot(7000, self.send_next_random_signal)
+                self.game_action_timer.stop()
+                self._schedule_game_callback(7000, self.send_next_random_signal)
         
         # Processar mensagens específicas do Unity
         if "FLOWER" in message:
@@ -1858,6 +2536,9 @@ class StreamingWidget(QWidget):
     
     def show_training_dialog(self, csv_file_path, patient_id, patient_name, auto_start: bool = False):
         """Mostra o diálogo de confirmação e execução do treino"""
+        if self._inference_job is not None:
+            self._apply_recording_ui(hint="Aguarde a inferencia antes de treinar")
+            return
         try:
             dialog = TrainingDialog(
                 self.training_controller,

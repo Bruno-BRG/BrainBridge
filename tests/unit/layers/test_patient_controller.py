@@ -37,7 +37,7 @@ def test_patient_controller_register_and_list():
             "name": "Murilo",
             "age": 29,
             "sex": "Masculino",
-            "affected_hand": "Esquerda",
+            "affected_hand": "left",
             "time_since_event": 4,
             "notes": "Paciente ativo",
         }
@@ -49,4 +49,3 @@ def test_patient_controller_register_and_list():
     assert patients[0]["name"] == "Murilo"
     assert patients[0]["id"] == 1
     assert patients[0]["created_at"] == "2026-03-02T00:00:00"
-

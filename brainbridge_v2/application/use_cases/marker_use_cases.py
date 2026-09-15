@@ -50,11 +50,9 @@ class RegisterMarkerUseCase:
         if normalized_marker == "T1":
             new_state = replace(state, t1_count=state.t1_count + 1)
             external_signal = "trigger_left" if normalized_task in {"teste", "treino", "jogo"} else None
-            esp32_direction = "esquerda" if external_signal else None
         else:
             new_state = replace(state, t2_count=state.t2_count + 1)
             external_signal = "trigger_right" if normalized_task in {"teste", "treino", "jogo"} else None
-            esp32_direction = "direita" if external_signal else None
 
         new_state.validate()
         saved = self._store.save(new_state)
@@ -63,7 +61,7 @@ class RegisterMarkerUseCase:
             "reason": None,
             "state": saved,
             "external_signal": external_signal,
-            "esp32_direction": esp32_direction,
+            "esp32_direction": None,  # Cues never authorize orthosis movement.
             "marker_type": normalized_marker,
         }
 

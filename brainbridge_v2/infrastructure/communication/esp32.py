@@ -12,11 +12,27 @@ import logging
 
 class ESP32SerialCommunicator:
     """
-    Classe para comunicação serial com ESP32
-    Envia comandos TRIGGER_LEFT e TRIGGER_RIGHT para ESP32 na COM4
+    Comunicacao serial com ESP32 da ortese (CIMATEC).
+
+    Protocolo compativel com Ortese/ortese.cpp (1 char, 115200 baud):
+    - 'l' = flexao sob demanda (IA esquerda), 'e' = extensao (IA direita)
+    - 'o' = parar, 'm' = entrar em modo IA, 'z' = ciclo automatico
+    - 'p' = pausar/retomar, 'r' = reset/calibracao, 'w/s/d/a' = calibracao
+    - '\\n/\\r/espaco' sao ignorados pelo firmware.
+
+    Os metodos publicos mantem a API antiga (send_trigger_left/right,
+    send_direction), mas os bytes enviados agora sao os chars acima —
+    nunca mais "LEFT"/"RIGHT"/"PING" (que continham 'r'/'p' e resetavam
+    ou pausavam a ortese sem querer).
     """
-    
-    def __init__(self, port: str = "COM3", baudrate: int = 115200, timeout: float = 1.0):
+
+    # Comandos de movimento IA (inputs do firmware; outputs/motores intactos).
+    CMD_FLEXAO = "l"
+    CMD_EXTENSAO = "e"
+    CMD_PARAR = "o"
+    CMD_MODO_IA = "m"
+
+    def __init__(self, port: str = "COM4", baudrate: int = 115200, timeout: float = 1.0):
         """
         Inicializa o comunicador serial
         
@@ -67,15 +83,29 @@ class ESP32SerialCommunicator:
     def port_exists(port: str) -> bool:
         """
         Verifica se uma porta serial existe
-        
+
         Args:
-            port: Nome da porta (ex: COM3)
-            
+            port: Nome da porta (ex: COM4)
+
         Returns:
             bool: True se porta existe
         """
         available_ports = [p[0] for p in ESP32SerialCommunicator.list_available_ports()]
         return port in available_ports
+
+    @staticmethod
+    def autodetect_port(preferred: Optional[str] = None) -> Optional[str]:
+        """Retorna a porta preferida se existir, senao a 1a USB/serial livre."""
+        try:
+            available = [p[0] for p in ESP32SerialCommunicator.list_available_ports()]
+        except Exception:
+            return preferred
+        if preferred and preferred in available:
+            return preferred
+        for cand in (preferred or "", "COM4", "COM3", "/dev/ttyUSB0", "/dev/ttyACM0"):
+            if cand and cand in available:
+                return cand
+        return available[0] if available else preferred
     
     def connect(self) -> bool:
         """
@@ -90,7 +120,12 @@ class ESP32SerialCommunicator:
                 print(f"[ESP32] ℹ Já está conectado em {self.port}", flush=True)
                 return True
             
-            # Verificar se porta existe antes de tentar conectar
+            # Verificar se porta existe antes de tentar conectar (com fallback).
+            if not self.port_exists(self.port):
+                fallback = self.autodetect_port(self.port)
+                if fallback and fallback != self.port and self.port_exists(fallback):
+                    print(f"[ESP32] Porta {self.port} ausente; usando {fallback}", flush=True)
+                    self.port = fallback
             if not self.port_exists(self.port):
                 available_ports = self.list_available_ports()
                 self.logger.error(f"Porta {self.port} não encontrada!")
@@ -119,16 +154,16 @@ class ESP32SerialCommunicator:
                     msg = f"[ESP32] ✓ Conectado em {self.port} @ {self.baudrate}"
                     self.logger.info(msg)
                     print(msg, flush=True)
-                    
-                    # Enviar comando de teste (sem lock recursivo)
-                    self.serial_connection.write(b"PING\n")
-                    self.serial_connection.flush()
-                    self.logger.debug("PING enviado")
-                    
+
+                    # Sem PING: o firmware interpreta 'p' como pausar e 'r'
+                    # (de RIGHT/PING) como reset. Conexao e silenciosa; o
+                    # menu do firmware ja confirma via leitura serial.
+                    self.logger.debug("Conexao silenciosa (sem PING)")
+
                     # Notificar mudança de conexão
                     if self.on_connection_changed:
                         self.on_connection_changed(True)
-                    
+
                     return True
                 else:
                     self.logger.error("Falha ao abrir porta serial")
@@ -220,12 +255,13 @@ class ESP32SerialCommunicator:
     
     def send_trigger_command(self, hand: str) -> bool:
         """
-        Envia comando de trigger para ESP32
+        Envia comando de trigger para ESP32 (protocolo 1-char do firmware).
         Mantém o trigger ativo por 3 segundos antes de liberar para o próximo
-        
+        (casa com TEMPO_MOVIMENTO 2s + TEMPO_PAUSA 1s da ortese).
+
         Args:
             hand: 'direita'/'right' ou 'esquerda'/'left'
-            
+
         Returns:
             bool: True se enviado com sucesso, False se trigger ainda ativo
         """
@@ -241,15 +277,18 @@ class ESP32SerialCommunicator:
                 else:
                     # Tempo expirou, liberar novo trigger
                     self.trigger_active = False
-        
-        # Enviar comando
-        if hand.lower() in ['direita', 'right']:
-            success = self._send_raw_command_unlocked("RIGHT")
-        elif hand.lower() in ['esquerda', 'left']:
-            success = self._send_raw_command_unlocked("LEFT")
+
+        # Mapeia para os inputs do firmware (nunca "LEFT"/"RIGHT").
+        # Esquerda = flexao ('l'), direita = extensao ('e').
+        normalized = (hand or "").strip().lower()
+        if normalized in ['direita', 'right', 'e', 'extensao', 'extensão']:
+            cmd = self.CMD_EXTENSAO
+        elif normalized in ['esquerda', 'left', 'l', 'flexao', 'flexão']:
+            cmd = self.CMD_FLEXAO
         else:
             self.logger.error(f"Comando de trigger inválido: {hand}")
             return False
+        success = self._send_raw_command_unlocked(cmd)
         
         if success:
             # Registrar tempo do trigger
@@ -281,12 +320,26 @@ class ESP32SerialCommunicator:
     
     def send_ping(self) -> bool:
         """
-        Envia comando PING para testar conexão
-        
-        Returns:
-            bool: True se enviado com sucesso
+        Health-check silencioso: nao envia nada que o firmware interprete
+        ('p' pausaria). Retorna apenas o estado da conexao.
         """
-        return self._send_raw_command("PING")
+        return bool(self.is_connected and self.serial_connection is not None)
+
+    def send_ia_mode(self) -> bool:
+        """Coloca a ortese em modo IA (aguarda 'l'/'e' sob demanda)."""
+        return self._send_raw_command(self.CMD_MODO_IA)
+
+    def send_stop(self) -> bool:
+        """Para os motores ('o')."""
+        return self._send_raw_command(self.CMD_PARAR)
+
+    def send_pause_toggle(self) -> bool:
+        """Alterna pausa ('p')."""
+        return self._send_raw_command("p")
+
+    def send_reset(self) -> bool:
+        """Volta para calibracao ('r')."""
+        return self._send_raw_command("r")
     
     def set_connection_callback(self, callback: Callable[[bool], None]):
         """

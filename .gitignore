@@ -16,6 +16,7 @@ venv/
 env/
 .env/
 .venv/
+.venv-dev/
 
 # IDE settings
 .idea/
@@ -51,3 +52,9 @@ window_plots/
 .env
 .env.local
 *.edf
+
+# Multi-dataset working data (baixado/convertido; centenas de MB)
+tools/datasets/data/
+brainbridge_v2/data/datasets/
+# Checkpoints treinados (binarios grandes; ver docs/PIPELINE_IA.md)
+*.keras

@@ -21,6 +21,22 @@ class StopUnityServerUseCase:
         self._gateway.stop_server()
 
 
+class StartUnitySessionUseCase:
+    def __init__(self, gateway: UnityGateway):
+        self._gateway = gateway
+
+    def execute(self, nome: str, nivel: int, lado: str, tarefa: str, sessoes: int = 0) -> bool:
+        return self._gateway.start_session(nome, nivel, lado, tarefa, sessoes)
+
+
+class SetPendingUnitySessionUseCase:
+    def __init__(self, gateway: UnityGateway):
+        self._gateway = gateway
+
+    def execute(self, nome: str, nivel: int, lado: str, tarefa: str, sessoes: int = 0) -> None:
+        self._gateway.set_pending_session(nome, nivel, lado, tarefa, sessoes)
+
+
 class SendUnityActionUseCase:
     def __init__(self, gateway: UnityGateway):
         self._gateway = gateway

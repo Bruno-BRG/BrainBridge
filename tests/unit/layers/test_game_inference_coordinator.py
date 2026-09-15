@@ -44,7 +44,7 @@ def test_game_inference_expires_two_second_window():
     )
     coordinator.start_window(started_at_ms=1000.0)
 
-    result = coordinator.add_sample([1.0, 2.0], now_ms=3001.0)
+    result = coordinator.add_sample([1.0, 2.0], now_ms=3501.0)
 
     assert result.status == GameInferenceCoordinator.STATUS_EXPIRED
     assert coordinator.is_window_open is False
@@ -157,3 +157,47 @@ def test_game_inference_rejects_invalid_runtime_config(kwargs):
 
     with pytest.raises(ValueError):
         coordinator.configure(**kwargs)
+
+
+@pytest.mark.parametrize("hand,task,index,allowed", [
+    ("left", "left", 0, True), ("right", "right", 1, True),
+    (None, "left", 0, False), ("left", "right", 0, False),
+    ("right", "left", 1, False), ("left", "left", 1, False),
+    ("right", "right", 0, False), ("left", "left", 0.5, False),
+])
+def test_movement_requires_affected_attempt_and_prediction(hand, task, index, allowed):
+    c = GameInferenceCoordinator(window_size=1)
+    generation = c.start_window(task_hand=task)
+    assert not c.allows_movement(generation, hand, index, 0.9)
+    c.add_sample(range(16))
+    assert c.claim_prediction(generation)
+    assert c.allows_movement(generation, hand, index, 0.9) is allowed
+    assert not c.claim_prediction(generation)
+    assert not c.allows_movement(generation, hand, index, float("nan"))
+    c.reset()
+    assert not c.allows_movement(generation, hand, index, 0.9)
+
+
+def test_full_cap_window_has_explicit_collection_margin_and_one_ready_result():
+    c = GameInferenceCoordinator()
+    generation = c.start_window(0, task_hand="right")
+    for i in range(250):
+        result = c.add_sample(range(16), now_ms=100 + (i + 1) * 8)
+    assert result.status == c.STATUS_READY
+    assert result.generation == generation
+    assert len(result.window) == 250
+    assert result.window[0] == list(range(16))
+    assert c.add_sample(range(16), now_ms=2110).status == c.STATUS_LOCKED
+    c.start_window(3000, task_hand="left")
+    assert not c.close_window(generation)
+    assert c.is_window_open
+    assert not c.claim_prediction(generation)
+
+
+def test_movement_fails_after_deadline_even_when_timer_has_not_run():
+    c = GameInferenceCoordinator(window_size=1)
+    generation = c.start_window(1000, task_hand="left")
+    c.add_sample(range(16), now_ms=1010)
+    c.claim_prediction(generation)
+    assert c.allows_movement(generation, "left", 0, 0.9, now_ms=3499)
+    assert not c.allows_movement(generation, "left", 0, 0.9, now_ms=3501)

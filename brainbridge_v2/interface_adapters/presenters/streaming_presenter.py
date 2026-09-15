@@ -48,6 +48,7 @@ class SessionViewModel:
     recording_id: int
     started_at_epoch: float
     game_mode: bool
+    free_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,7 @@ class StreamingSessionStateViewModel:
     esp32_connected: bool
     model_loaded: bool
     model_name: Optional[str]
+    free_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -223,6 +225,7 @@ class SessionPresenter:
             recording_id=session.recording_id,
             started_at_epoch=session.started_at_epoch,
             game_mode=session.game_mode,
+            free_mode=session.free_mode,
         )
 
 
@@ -319,6 +322,7 @@ class StreamingSessionStatePresenter:
             recording_id=session.recording_id if session is not None else None,
             started_at_epoch=session.started_at_epoch if session is not None else None,
             game_mode=session.game_mode if session is not None else False,
+            free_mode=session.free_mode if session is not None else False,
             recording_active=recording_active,
             baseline_active=marker_state.baseline_active,
             baseline_remaining_seconds=marker_state.baseline_remaining_seconds,
@@ -429,9 +433,72 @@ class ConnectionStatusPresenter:
         return LabelStateViewModel(text=text, style_sheet=_status_style(color))
 
 
+@dataclass(frozen=True)
+class ProgressionViewModel:
+    session_count: int
+    level: int
+
+
+class ProgressionPresenter:
+    """Progressão do paciente: nível VR deriva das sessões já realizadas."""
+
+    MAX_LEVEL = 11
+
+    @staticmethod
+    def level_for_session_count(count) -> int:
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            n = 0
+        return max(0, min(ProgressionPresenter.MAX_LEVEL, n))
+
+    @staticmethod
+    def present(session_count) -> ProgressionViewModel:
+        try:
+            n = int(session_count)
+        except (TypeError, ValueError):
+            n = 0
+        n = max(0, n)
+        return ProgressionViewModel(
+            session_count=n,
+            level=ProgressionPresenter.level_for_session_count(n),
+        )
+
+    @staticmethod
+    def summary_text(session_count) -> str:
+        view = ProgressionPresenter.present(session_count)
+        sessao = "sessão" if view.session_count == 1 else "sessões"
+        return f"{view.session_count} {sessao} • Nível {view.level}"
+
+
 class AccuracyPresenter:
     @staticmethod
     def parse_message(message: str) -> Optional[AccuracyTrialViewModel]:
+        text = (message or "").strip()
+        upper = text.upper()
+
+        # Formato real do VR (waterscript/AnimationTrigger):
+        # o VR sempre envia CORRECT ou WRONG ao fim da tentativa
+        # (e LEFT_FLOWER/RIGHT_FLOWER como feedback visual antes).
+        # Acurácia conta 1 tentativa por CORRECT/WRONG.
+        if upper == "CORRECT":
+            return AccuracyTrialViewModel(
+                expected_action="TARGET",
+                real_action="TARGET",
+                is_correct=True,
+            )
+        if upper == "WRONG":
+            return AccuracyTrialViewModel(
+                expected_action="TARGET",
+                real_action="MISS",
+                is_correct=False,
+            )
+        # Feedback visual isolado não conta como tentativa
+        # (o CORRECT/WRONG da mesma tentativa conta).
+        # Mantido como None para não inflar a acurácia em dobro.
+        if upper in ("LEFT_FLOWER", "RIGHT_FLOWER"):
+            return None
+
         if "," not in message:
             return None
 
@@ -503,6 +570,9 @@ class GameRuntimePresenter:
             "active_fallback": ("🟡 IA: Ativa (fallback)", "orange"),
             "active_window": ("🟢 IA: Ativa (5s)", "green"),
             "inactive": ("🔴 IA: Inativa", "red"),
+            "free_running": ("🟢 IA Livre: rodando", "green"),
+            "free_waiting_eeg": ("🟡 IA Livre: aguardando EEG", "orange"),
+            "free_no_model": ("⚪ IA Livre: sem modelo (só EEG)", "gray"),
         }
         text, color = mapping.get(state, mapping["stopped"])
         return AiStatusViewModel(
@@ -580,14 +650,25 @@ class TaskViewStatePresenter:
     def present(task: str, is_recording: bool) -> TaskViewStateViewModel:
         normalized_task = task.strip().lower()
         game_mode = normalized_task == "jogo"
+        free_mode = normalized_task == "livre"
         if is_recording:
-            record_button_text = "Parar Jogo" if game_mode else "Parar Gravação"
+            if game_mode:
+                record_button_text = "Parar Jogo"
+            elif free_mode:
+                record_button_text = "Parar Livre"
+            else:
+                record_button_text = "Parar Gravação"
         else:
-            record_button_text = "Iniciar Jogo" if game_mode else "Iniciar Gravação"
+            if game_mode:
+                record_button_text = "Iniciar Jogo"
+            elif free_mode:
+                record_button_text = "Iniciar Livre"
+            else:
+                record_button_text = "Iniciar Gravação"
         return TaskViewStateViewModel(
             record_button_text=record_button_text,
             status_table_visible=game_mode,
             game_visible=game_mode,
-            stats_visible=game_mode,
+            stats_visible=(game_mode or free_mode),
             accuracy_visible=game_mode,
         )

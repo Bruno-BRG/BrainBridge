@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTabWidget
+from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTabWidget, QScrollArea
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
@@ -19,7 +19,8 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Configura a interface principal"""
         self.setWindowTitle("BrainBridge - Sistema BCI")
-        self.setGeometry(100, 100, 1400, 900)
+        available = self.screen().availableGeometry()
+        self.resize(min(1400, available.width() - 40), min(900, available.height() - 60))
         
         # Aplicar tema
         self.setStyleSheet(Theme.get_stylesheet())
@@ -42,8 +43,14 @@ class MainWindow(QMainWindow):
         self.tabs.setTabPosition(QTabWidget.North)
 
         # Aba de pacientes
-        self.patient_widget = PatientRegistrationWidget(self.container.patient_controller)
-        self.tabs.addTab(self.patient_widget, "👥 Cadastro de Pacientes")
+        self.patient_widget = PatientRegistrationWidget(
+            self.container.patient_controller,
+            recording_controller=self.container.recording_controller,
+        )
+        patient_scroll = QScrollArea()
+        patient_scroll.setWidgetResizable(True)
+        patient_scroll.setWidget(self.patient_widget)
+        self.tabs.addTab(patient_scroll, "👥 Cadastro de Pacientes")
 
         # Aba de streaming
         self.streaming_widget = StreamingWidget(

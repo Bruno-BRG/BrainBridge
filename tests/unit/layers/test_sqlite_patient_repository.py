@@ -20,7 +20,7 @@ def test_sqlite_patient_repository_add_and_list():
                 name="Joana",
                 age=52,
                 sex="Feminino",
-                affected_hand="Direita",
+                affected_hand="right",
                 time_since_event=10,
                 notes="Caso de teste",
             )
@@ -31,6 +31,6 @@ def test_sqlite_patient_repository_add_and_list():
         assert len(patients) == 1
         assert patients[0].id == patient_id
         assert patients[0].name == "Joana"
-        assert patients[0].affected_hand == "Direita"
+        assert patients[0].affected_hand == "right"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

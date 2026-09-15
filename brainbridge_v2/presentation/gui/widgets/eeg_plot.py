@@ -20,15 +20,29 @@ CHANNEL_COLORS = [
 ]
 
 
-class _PyQtGraphBackend:
+class _BufferedBackend:
     CHANNEL_COUNT = 16
     CHANNEL_OFFSET = 100.0
     WINDOW_SECONDS = 8.0
     SAMPLE_RATE = 125
     MAX_SAMPLES = int(WINDOW_SECONDS * SAMPLE_RATE)
 
+    def add_data(self, eeg_data: np.ndarray):
+        sample = np.asarray(eeg_data, dtype=np.float32)
+        if sample.shape != (self.CHANNEL_COUNT,) or not np.isfinite(sample).all():
+            return
+        # Acquisition/filter callers may reuse their arrays after this call.
+        self.data_buffer.append(sample.copy())
+        self.time_buffer.append(self.current_time)
+        self.current_time += 1.0 / self.SAMPLE_RATE
+        self._dirty = True
+
+
+class _PyQtGraphBackend(_BufferedBackend):
+
     def __init__(self, parent_widget: QWidget):
-        pg.setConfigOptions(antialias=False, useOpenGL=True, foreground=Theme.WHITE)
+        # Raster rendering also works on remote desktops and without a GL context.
+        pg.setConfigOptions(antialias=False, foreground=Theme.WHITE)
         self.data_buffer = deque(maxlen=self.MAX_SAMPLES)
         self.time_buffer = deque(maxlen=self.MAX_SAMPLES)
         self.current_time = 0.0
@@ -37,15 +51,20 @@ class _PyQtGraphBackend:
         layout = QVBoxLayout(parent_widget)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.plot_widget = pg.PlotWidget()
+        self.plot_widget = pg.PlotWidget(useOpenGL=False)
         self.plot_widget.setBackground(Theme.PANEL_BG)
         self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
         self.plot_widget.setLabel("bottom", "Tempo (s)", color=Theme.WHITE)
-        self.plot_widget.setLabel("left", "Amplitude (µV)", color=Theme.WHITE)
-        self.plot_widget.setTitle("Dados EEG em Tempo Real", color=Theme.WHITE, size="11pt")
+        self.plot_widget.setLabel("left", "Canais / intervalo 100 µV", color=Theme.WHITE)
         self.plot_widget.setXRange(0, self.WINDOW_SECONDS, padding=0)
         self.plot_widget.setYRange(-self.CHANNEL_OFFSET, self.CHANNEL_OFFSET * self.CHANNEL_COUNT)
         self.plot_widget.getPlotItem().hideButtons()
+        self.plot_widget.getPlotItem().disableAutoRange()
+        self.plot_widget.setMouseEnabled(x=False, y=False)
+        self.plot_widget.getAxis("left").setTicks([[
+            (i * self.CHANNEL_OFFSET, f"CH {i + 1:02d}")
+            for i in range(self.CHANNEL_COUNT)
+        ]])
 
         axis_pen = pg.mkPen(Theme.BTN_BORDER)
         for axis_name in ("bottom", "left"):
@@ -62,22 +81,14 @@ class _PyQtGraphBackend:
 
         self.timer = QTimer(parent_widget)
         self.timer.timeout.connect(self._flush_plot)
-        self.timer.start(40)
-
-    def add_data(self, eeg_data: np.ndarray):
-        if len(eeg_data) != self.CHANNEL_COUNT:
-            return
-        self.data_buffer.append(np.asarray(eeg_data, dtype=np.float32))
-        self.time_buffer.append(self.current_time)
-        self.current_time += 1.0 / self.SAMPLE_RATE
-        self._dirty = True
+        self.timer.start(33)
 
     def _flush_plot(self):
         if not self._dirty or len(self.data_buffer) < 2:
             return
         self._dirty = False
 
-        times = np.asarray(self.time_buffer, dtype=np.float32)
+        times = np.asarray(self.time_buffer, dtype=np.float64)
         data = np.stack(self.data_buffer, axis=0)
         current_time = times[-1]
         window_start = max(0.0, current_time - self.WINDOW_SECONDS)
@@ -95,12 +106,7 @@ class _PyQtGraphBackend:
             )
 
 
-class _MatplotlibBackend:
-    CHANNEL_COUNT = 16
-    CHANNEL_OFFSET = 100.0
-    WINDOW_SECONDS = 8.0
-    SAMPLE_RATE = 125
-    MAX_SAMPLES = int(WINDOW_SECONDS * SAMPLE_RATE)
+class _MatplotlibBackend(_BufferedBackend):
 
     def __init__(self, parent_widget: QWidget):
         from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -127,8 +133,10 @@ class _MatplotlibBackend:
             spine.set_color(Theme.BTN_BORDER)
         self.ax.tick_params(colors=Theme.GRAY, labelcolor=Theme.WHITE)
         self.ax.set_xlabel("Tempo (s)", color=Theme.WHITE)
-        self.ax.set_ylabel("Amplitude (µV)", color=Theme.WHITE)
-        self.ax.set_title("Dados EEG em Tempo Real", color=Theme.WHITE)
+        self.ax.set_ylabel("Canais / intervalo 100 µV", color=Theme.WHITE)
+        self.ax.set_yticks(np.arange(self.CHANNEL_COUNT) * self.CHANNEL_OFFSET)
+        self.ax.set_yticklabels([f"CH {i + 1:02d}" for i in range(self.CHANNEL_COUNT)], fontsize=8)
+        self.figure.subplots_adjust(left=0.16, right=0.98, top=0.98, bottom=0.12)
         self.ax.grid(True, alpha=0.25, color=Theme.BTN_BORDER)
 
         self.lines = []
@@ -140,20 +148,12 @@ class _MatplotlibBackend:
         self.timer.timeout.connect(self._flush_plot)
         self.timer.start(50)
 
-    def add_data(self, eeg_data: np.ndarray):
-        if len(eeg_data) != self.CHANNEL_COUNT:
-            return
-        self.data_buffer.append(np.asarray(eeg_data, dtype=np.float32))
-        self.time_buffer.append(self.current_time)
-        self.current_time += 1.0 / self.SAMPLE_RATE
-        self._dirty = True
-
     def _flush_plot(self):
         if not self._dirty or len(self.data_buffer) < 2:
             return
         self._dirty = False
 
-        times = np.asarray(self.time_buffer, dtype=np.float32)
+        times = np.asarray(self.time_buffer, dtype=np.float64)
         data = np.stack(self.data_buffer, axis=0)
         current_time = times[-1]
         window_start = max(0.0, current_time - self.WINDOW_SECONDS)

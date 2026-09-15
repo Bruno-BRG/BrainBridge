@@ -54,6 +54,9 @@ class Theme:
     PADDING_DEFAULT = "8px"
     PADDING_LARGE = "12px"
 
+    # Sidebar da aba de streaming (largura fixa, sem scroll)
+    SIDEBAR_WIDTH = 300
+
     # Aliases para compatibilidade com código existente
     PRIMARY_DARK_GREEN = BLUE
     PRIMARY_GREEN = BTN_GREEN
@@ -115,7 +118,7 @@ class Theme:
     def recording_status_label():
         return (
             f"color: {Theme.GRAY}; font-size: 12px; font-weight: 600; "
-            "background: transparent; min-width: 88px; max-width: 120px;"
+            "background: transparent;"
         )
 
     @staticmethod
@@ -195,6 +198,45 @@ class Theme:
     @staticmethod
     def vertical_separator():
         return f"background-color: {Theme.SEPARATOR}; max-width: 1px; min-width: 1px;"
+
+    @staticmethod
+    def card():
+        """Cartao compacto para a fileira superior do streaming (sem scroll)."""
+        return (
+            f"background-color: {Theme.PANEL_BG}; border-radius: 10px; "
+            f"border: 1px solid rgba(59, 91, 219, 0.55);"
+        )
+
+    @staticmethod
+    def card_title():
+        return (
+            f"color: {Theme.LIGHT_BLUE}; font-size: 11px; font-weight: 800; "
+            "background: transparent; border: none; letter-spacing: 0.5px;"
+        )
+
+    @staticmethod
+    def compact_overrides():
+        """Ajustes compactos aplicados SOMENTE na subarvore do streaming.
+
+        Reduz alturas minimas e fontes para tudo caber sem QScrollArea.
+        Deve ser concatenado apos get_stylesheet() no widget.
+        """
+        return f"""
+        StreamingWidget QGroupBox {{
+            font-size: 10pt;
+            margin-top: 8px;
+            padding-top: 4px;
+        }}
+        StreamingWidget QPushButton {{
+            min-height: 22px;
+        }}
+        StreamingWidget QComboBox {{
+            min-height: 22px;
+        }}
+        StreamingWidget QLineEdit, StreamingWidget QSpinBox {{
+            min-height: 22px;
+        }}
+        """
 
     @staticmethod
     def get_stylesheet():
@@ -285,6 +327,18 @@ class Theme:
 
         QPushButton:pressed {{
             background-color: {Theme.BTN_BORDER};
+        }}
+
+        QPushButton:checked {{
+            border: 2px solid {Theme.LIGHT_BLUE};
+        }}
+
+        QSplitter::handle {{
+            background-color: {Theme.SCROLLBAR_TRACK};
+        }}
+
+        QSplitter::handle:hover {{
+            background-color: {Theme.BLUE};
         }}
 
         QPushButton:disabled {{

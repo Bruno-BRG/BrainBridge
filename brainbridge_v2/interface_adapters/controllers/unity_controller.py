@@ -10,7 +10,9 @@ from brainbridge_v2.application.use_cases.unity_use_cases import (
     EndUnityTaskUseCase,
     SendUnityActionUseCase,
     SendUnityTriggerUseCase,
+    SetPendingUnitySessionUseCase,
     StartUnityServerUseCase,
+    StartUnitySessionUseCase,
     StopUnityServerUseCase,
 )
 
@@ -29,6 +31,8 @@ class UnityController:
         send_trigger_use_case: SendUnityTriggerUseCase,
         end_task_use_case: EndUnityTaskUseCase,
         end_session_use_case: EndUnitySessionUseCase,
+        start_session_use_case: StartUnitySessionUseCase | None = None,
+        set_pending_session_use_case: SetPendingUnitySessionUseCase | None = None,
     ):
         self._gateway = gateway
         self._start_server_use_case = start_server_use_case
@@ -37,6 +41,8 @@ class UnityController:
         self._send_trigger_use_case = send_trigger_use_case
         self._end_task_use_case = end_task_use_case
         self._end_session_use_case = end_session_use_case
+        self._start_session_use_case = start_session_use_case or StartUnitySessionUseCase(gateway)
+        self._set_pending_session_use_case = set_pending_session_use_case or SetPendingUnitySessionUseCase(gateway)
 
     @classmethod
     def from_gateway(cls, gateway: UnityGateway) -> "UnityController":
@@ -55,6 +61,12 @@ class UnityController:
 
     def stop_server(self) -> None:
         self._stop_server_use_case.execute()
+
+    def start_session(self, nome: str, nivel: int, lado: str, tarefa: str, sessoes: int = 0) -> bool:
+        return self._start_session_use_case.execute(nome, nivel, lado, tarefa, sessoes)
+
+    def set_pending_session(self, nome: str, nivel: int, lado: str, tarefa: str, sessoes: int = 0) -> None:
+        self._set_pending_session_use_case.execute(nome, nivel, lado, tarefa, sessoes)
 
     def send_action(self, action: str) -> bool:
         return self._send_action_use_case.execute(action)

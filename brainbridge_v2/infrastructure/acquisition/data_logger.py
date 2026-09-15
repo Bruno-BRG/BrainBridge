@@ -3,6 +3,7 @@ OpenBCI CSV Logger - Formato compatível com OpenBCI
 """
 import csv
 import os
+import time
 from datetime import datetime
 from typing import List, Optional
 
@@ -53,6 +54,9 @@ class OpenBCICSVLogger:
         self.csv_writer.writerow(["%OpenBCI Raw EXG Data"])
         self.csv_writer.writerow(["%Number of channels = 16"])
         self.csv_writer.writerow(["%Sample Rate = 125 Hz"])
+        self.csv_writer.writerow(["%Signal Stage = raw"])
+        self.csv_writer.writerow(["%Timestamp Source = host logger reception time.time Unix seconds; not device acquisition time"])
+        self.csv_writer.writerow(["%Montage = unknown; runtime electrode positions not verified"])
         self.csv_writer.writerow(["%Board = OpenBCI_GUI$BoardCytonSerialDaisy"])
         
         # Cabeçalho das colunas (exatamente como no arquivo de exemplo)
@@ -89,6 +93,7 @@ class OpenBCICSVLogger:
         """
         if len(eeg_data) != 16:
             raise ValueError(f"Esperado 16 canais EEG, recebido {len(eeg_data)}")
+        received_at = time.time()
         
         # Determinar marcador atual
         current_marker = ""
@@ -102,7 +107,7 @@ class OpenBCICSVLogger:
             # Verificar se devemos adicionar T0 automaticamente
             if self.last_marker in ['T1', 'T2']:
                 self.samples_since_marker += 1
-                # Após 250 amostras (~3.2s a 125Hz), adicionar T0 automaticamente
+                # Após 250 amostras (2s a 125Hz), adicionar T0 automaticamente
                 if self.samples_since_marker >= 250:
                     current_marker = 'T0'
                     self.last_marker = 'T0'
@@ -123,8 +128,8 @@ class OpenBCICSVLogger:
         # Analog Channels (3 canais, zeros)
         row.extend([0, 0, 0])
         
-        # Timestamp, Other.7, Timestamp (Formatted) (zeros)
-        row.extend([0, 0, 0])
+        # Host receipt at the logger, not reconstructed device sample times.
+        row.extend([received_at, 0, datetime.fromtimestamp(received_at).isoformat(timespec='milliseconds')])
         
         # Annotations (marker ou vazio)
         row.append(current_marker)

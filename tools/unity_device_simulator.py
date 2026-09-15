@@ -134,16 +134,26 @@ class UnityDeviceSimulator:
             while not self.stop_event.is_set():
                 try:
                     data, addr = self.udp_socket.recvfrom(4096)
-                    message = data.decode('utf-8', errors='ignore')
-                    
-                    # Parse do broadcast "Confirm:IP1,IP2,IP3"
-                    if message.startswith("Confirm:"):
-                        ips_str = message.replace("Confirm:", "").strip()
-                        self.server_ips = [ip.strip() for ip in ips_str.split(',')]
+                    message = data.decode('utf-8', errors='ignore').strip()
+
+                    # Formato atual do BrainBridge: apenas "IP1,IP2,..." (sem prefixo).
+                    # Aceita também o legado "Confirm:IP1,IP2".
+                    candidate = message
+                    if candidate.startswith("Confirm:"):
+                        candidate = candidate.replace("Confirm:", "").strip()
+                    # Heurística: contém ponto e vírgula? não. Contém IP?
+                    parts = [p.strip() for p in candidate.split(',') if p.strip()]
+                    is_ip_list = bool(parts) and all(
+                        p.replace(".", "").replace(":", "").replace(" ", "").replace("-", "").isdigit()
+                        or p.count(".") == 3
+                        for p in parts
+                    )
+                    if is_ip_list:
+                        self.server_ips = parts
                         self.server_ip = self.server_ips[0] if self.server_ips else None
-                        
+
                         if self.server_ip:
-                            print(f"✅ Servidor descoberto!")
+                            print("✅ Servidor descoberto!")
                             print(f"   IPs disponíveis: {self.server_ips}")
                             print(f"   Conectando ao: {self.server_ip}\n")
                             return True
@@ -242,32 +252,79 @@ class UnityDeviceSimulator:
         """Processa mensagem recebida do servidor"""
         print(f"\n📥 [{self.state.value.upper()}] Recebido do servidor:")
         print(f"   {message}\n")
-        
-        # Parse de dados do paciente
-        if "Dados Paciente:" in message or "Nome:" in message:
-            self._parse_patient_data(message)
+
+        stripped = message.strip()
+
+        # 0) JSON do paciente {"nome","nivel","lado"} (formato moderno)
+        if "{" in stripped and "}" in stripped and "nome" in stripped.lower():
+            self._parse_patient_json(stripped)
             self.state = DeviceState.RECEIVING_DATA
-            
+
             if self.config.auto_confirm_data:
                 time.sleep(0.5)
                 self.send_confirm()
-        
-        # Parse de tarefa
-        elif "Tarefa:" in message:
+            return
+
+        # Parse de dados do paciente (formato legível)
+        if "Dados Paciente:" in message or "Nome:" in message:
+            self._parse_patient_data(message)
+            self.state = DeviceState.RECEIVING_DATA
+
+            if self.config.auto_confirm_data:
+                time.sleep(0.5)
+                self.send_confirm()
+            return
+
+        # Parse de tarefa (formato moderno: "Treino"/"Jogo" puro ou "Tarefa: ...")
+        if stripped.lower() in ("treino", "jogo") or "Tarefa:" in message:
             self._parse_task(message)
-            self.state = DeviceState.RECEIVING_TASK
-        
+            self.state = DeviceState.READY
+            return
+
         # Trigger para iniciar
-        elif "Trigger" in message:
+        if "Trigger" in message or "HAND_CLOSE" in message:
             print("🎯 TRIGGER RECEBIDO - Iniciando tarefa!")
             self.state = DeviceState.ACTIVE
-        
-        # Finalização
-        elif "Finalizar" in message:
+            return
+
+        # Finalização (moderno: END_TASK / END_SESSION)
+        if "END_TASK" in message or "END_SESSION" in message or "Finalizar" in message:
             print("🏁 FINALIZAÇÃO RECEBIDA - Encerrando sessão!")
             self.state = DeviceState.ENDING
             time.sleep(0.5)
             self.send_end_confirmation()
+            return
+
+    def _parse_patient_json(self, message: str):
+        """Extrai dados do paciente no formato JSON moderno."""
+        try:
+            payload = json.loads(message.strip().splitlines()[-1] if "\n" in message else message)
+            # Pode vir com múltiplas linhas coladas; tenta extrair o objeto.
+            if not isinstance(payload, dict):
+                raise ValueError("JSON não é objeto")
+            self.patient_name = str(payload.get("nome", self.patient_name or ""))
+            self.patient_nivel = int(payload.get("nivel", self.patient_nivel or 0))
+            self.patient_lado = str(payload.get("lado", self.patient_lado or ""))
+            print(f"👤 Paciente: {self.patient_name}")
+            print(f"📊 Nível: {self.patient_nivel}")
+            print(f"🖐️  Lado: {self.patient_lado}")
+        except Exception:
+            # Fallback: regex tolerante
+            try:
+                m_nome = re.search(r'"nome"\s*:\s*"([^"]+)"', message, re.IGNORECASE)
+                m_nivel = re.search(r'"nivel"\s*:\s*(\d+)', message, re.IGNORECASE)
+                m_lado = re.search(r'"lado"\s*:\s*"([^"]+)"', message, re.IGNORECASE)
+                if m_nome:
+                    self.patient_name = m_nome.group(1).strip()
+                if m_nivel:
+                    self.patient_nivel = int(m_nivel.group(1))
+                if m_lado:
+                    self.patient_lado = m_lado.group(1).strip()
+                print(f"👤 Paciente: {self.patient_name}")
+                print(f"📊 Nível: {self.patient_nivel}")
+                print(f"🖐️  Lado: {self.patient_lado}")
+            except Exception as e:
+                print(f"⚠️  Erro ao parsear JSON do paciente: {e}")
 
     def _parse_patient_data(self, message: str):
         """Extrai dados do paciente da mensagem"""

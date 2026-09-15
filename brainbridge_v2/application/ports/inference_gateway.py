@@ -15,5 +15,6 @@ class InferenceGateway(Protocol):
     def get_loaded_model(self) -> Optional[ModelMetadata]:
         ...
 
-    def predict(self, eeg_window: Sequence[Sequence[float]]) -> PredictionResult:
+    def predict(self, eeg_window: Sequence[Sequence[float]], *,
+                input_fs: Optional[float] = None) -> PredictionResult:
         ...

@@ -73,6 +73,7 @@ class PatientData:
     nome: str
     nivel: int  # 0-11 (faixas usadas pelo protocolo atual)
     lado: str   # "Direito" ou "Esquerdo"
+    sessoes: int = 0  # total de sessões já realizadas (progressão)
 
     def __post_init__(self):
         """Valida dados do paciente"""
@@ -85,12 +86,15 @@ class PatientData:
         if self.lado not in ["Direito", "Esquerdo"]:
             raise ValueError(f"Lado deve ser 'Direito' ou 'Esquerdo', recebido: {self.lado}")
 
+        if type(self.sessoes) is not int or self.sessoes < 0:
+            raise ValueError(f"Sessões deve ser inteiro >= 0, recebido: {self.sessoes!r}")
+
     def format_message(self) -> str:
         """
         Formata dados do paciente para envio ao VR (formato legível)
         Nota: start_session agora prefere JSON, mas mantemos formato legível para compatibilidade
         """
-        return f"Dados Paciente:\nNome: {self.nome}\nNivel: {self.nivel}\nLado: {self.lado}"
+        return f"Dados Paciente:\nNome: {self.nome}\nNivel: {self.nivel}\nLado: {self.lado}\nSessoes: {self.sessoes}"
 
     def to_json(self) -> str:
         """Converte para JSON para protocolo moderno"""
@@ -98,7 +102,8 @@ class PatientData:
         return json.dumps({
             "nome": self.nome,
             "nivel": self.nivel,
-            "lado": self.lado
+            "lado": self.lado,
+            "sessoes": self.sessoes,
         })
 
 
@@ -474,12 +479,7 @@ class UnityCommunicator:
 
         # 1. Enviar dados do paciente em formato JSON
         print(f"\n📋 Enviando dados do paciente (JSON)...", flush=True)
-        import json
-        patient_json = json.dumps({
-            "nome": patient.nome,
-            "nivel": patient.nivel,
-            "lado": patient.lado
-        })
+        patient_json = patient.to_json()
         # debug explícito antes de enviar
         print(f"[START_SESSION] JSON do paciente a ser enviado: {patient_json}", flush=True)
 
@@ -498,7 +498,32 @@ class UnityCommunicator:
             return False
 
         print("✅ Sessão iniciada com sucesso", flush=True)
+        # Marca como enviado para que o HEADER posterior do VR não duplique
+        # o envio via _auto_send_session_info.
+        self._sent_session_info = True
         return True
+
+    def set_pending_session(self, patient: PatientData, task_type: TaskType) -> None:
+        """
+        Configura paciente/tarefa sem exigir envio imediato.
+
+        Usado pela GUI no início da gravação: quando o VR enviar HEADER,
+        o _auto_send_session_info usa esses dados reais em vez do debug padrão.
+        Se a sessão estiver IDLE, transiciona para SETUP.
+        Se o VR já estiver conectado, envia imediatamente (corrige caso o
+        auto-send anterior tenha usado dados de debug).
+        """
+        self.session.patient = patient
+        self.session.task_type = task_type
+        if self.session.phase == SessionPhase.IDLE:
+            self._transition_session_phase(SessionPhase.SETUP)
+        # Permite (re)envio com dados reais.
+        self._sent_session_info = False
+        if self._is_server_operational() and self.tcp_connected:
+            try:
+                self._auto_send_session_info()
+            except Exception as e:
+                print(f"[PENDING_SESSION] Erro ao publicar sessão real: {e}", flush=True)
 
     def send_trigger(self) -> bool:
         """
@@ -739,8 +764,13 @@ class UnityCommunicator:
     def _handle_tcp_connection(self, conn: socket.socket, addr):
         """
         Lida com uma conexão TCP específica
-        Processa mensagens do VR e dispara callbacks apropriados
+        Processa mensagens do VR e dispara callbacks apropriados.
+
+        Framing: mensagens são delimitadas por '\\n' (aceita '\\r\\n').
+        Acumula fragmentos e processa cada linha completa separadamente,
+        para não perder comandos quando o SO coalesceia pacotes.
         """
+        recv_buffer = ""
         try:
             conn.settimeout(1.0)
 
@@ -751,15 +781,50 @@ class UnityCommunicator:
                         print("[TCP] Unity desconectou", flush=True)
                         break
 
-                    message = data.decode('utf-8', errors='ignore').strip()
-                    print(f"[TCP] Recebido: {message}", flush=True)
+                    chunk = data.decode('utf-8', errors='ignore')
+                    recv_buffer += chunk
 
-                    # Processar mensagens do novo protocolo
-                    self._process_vr_message(message)
+                    # Processa todas as linhas completas; guarda fragmento final.
+                    while '\n' in recv_buffer:
+                        line, recv_buffer = recv_buffer.split('\n', 1)
+                        message = line.strip().strip('\r')
+                        if not message:
+                            continue
+                        print(f"[TCP] Recebido: {message}", flush=True)
 
-                    # Callback genérico (compatibilidade)
-                    if self.on_message_received:
-                        self.on_message_received(message)
+                        # Processar mensagens do novo protocolo
+                        try:
+                            self._process_vr_message(message)
+                        except Exception as e:
+                            print(f"[TCP] Erro ao processar mensagem: {e}", flush=True)
+
+                        # Callback genérico (compatibilidade) por mensagem
+                        if self.on_message_received:
+                            try:
+                                self.on_message_received(message)
+                            except Exception as e:
+                                print(f"[TCP] Erro em on_message_received: {e}", flush=True)
+
+                    # Evita crescimento ilimitado se VR nunca enviar newline
+                    # (ex: SendPub sem '\\n'): processa como mensagem única
+                    # após acumular fragmento razoável e sem novos dados.
+                    # Mantemos o buffer; o próximo recv com '\\n' resolve.
+                    # Se o buffer ficar muito grande sem newline, despacha
+                    # por tentativa de comandos conhecidos grudados.
+                    if len(recv_buffer) > self.BUFFER_SIZE * 4:
+                        fallback = recv_buffer.strip()
+                        if fallback:
+                            print(f"[TCP] Recebido (sem newline, fallback): {fallback}", flush=True)
+                            try:
+                                self._process_vr_message(fallback)
+                            except Exception as e:
+                                print(f"[TCP] Erro ao processar fallback: {e}", flush=True)
+                            if self.on_message_received:
+                                try:
+                                    self.on_message_received(fallback)
+                                except Exception:
+                                    pass
+                        recv_buffer = ""
 
                 except socket.timeout:
                     continue
@@ -811,6 +876,21 @@ class UnityCommunicator:
         # Reconhecer "WRONG" - erro na ação
         if msg_lower == "wrong":
             print("⚠️  VR registrou ação incorreta (WRONG)", flush=True)
+            return
+
+        # Reconhecer "CORRECT" - acerto do usuário (GUI usa via on_message_received)
+        if msg_lower == "correct":
+            print("✅ VR registrou ação correta (CORRECT)", flush=True)
+            return
+
+        # RESET vindo do VR (CvMobClient envia "B;RESET;E" ao receber RESET)
+        if msg_lower == "b;reset;e" or msg_lower == "reset":
+            print("🔄 VR solicitou RESET", flush=True)
+            return
+
+        # Dados de tracking do CvMobClient ("B;<elapsed>;...;E"): ignora silenciosamente,
+        # não é comando de protocolo. Evita poluir log como "não reconhecida".
+        if msg_lower.startswith("b;") and msg_lower.endswith(";e"):
             return
 
         # Reconhecer TRIGGER commands que o VR pode enviar como feedback
@@ -898,12 +978,13 @@ class UnityCommunicator:
             self._sent_session_info = True
 
             import json
-            # 1) JSON (moderno)
+            # 1) JSON (moderno, inclui sessoes para progressão no VR)
             try:
                 patient_json = self.session.patient.to_json() if hasattr(self.session.patient, "to_json") else json.dumps({
                     "nome": self.session.patient.nome,
                     "nivel": self.session.patient.nivel,
-                    "lado": self.session.patient.lado
+                    "lado": self.session.patient.lado,
+                    "sessoes": getattr(self.session.patient, "sessoes", 0),
                 })
                 print(f"[AUTO_SEND] Enviando paciente (JSON): {patient_json}", flush=True)
                 sent_json = self.send_command(patient_json)
@@ -973,6 +1054,10 @@ class UDP_sender:
         Envia sinal de ação
         Compatível com chamadas legadas
         """
+        # Usa o singleton atual (não o _communicator capturado na definição
+        # da classe): se a instância foi recriada, a antiga estaria parada
+        # e o envio falharia com "Servidor não está ativo".
+        communicator = UnityCommunicator()
         # debounce: avoid sending the same action repeatedly in a short window
         try:
             now = time.time()
@@ -989,15 +1074,15 @@ class UDP_sender:
 
         # Mapear ações legadas
         if action.lower() == 'direita':
-            return cls._communicator.send_hand_command('direita')
+            return communicator.send_hand_command('direita')
         elif action.lower() == 'esquerda':
-            return cls._communicator.send_hand_command('esquerda')
+            return communicator.send_hand_command('esquerda')
         elif action.lower() == 'trigger_right':
-            return cls._communicator.send_trigger_command('direita')
+            return communicator.send_trigger_command('direita')
         elif action.lower() == 'trigger_left':
-            return cls._communicator.send_trigger_command('esquerda')
+            return communicator.send_trigger_command('esquerda')
         else:
-            return cls._communicator.send_command(action)
+            return communicator.send_command(action)
 
     @classmethod
     def is_server_active(cls) -> bool:

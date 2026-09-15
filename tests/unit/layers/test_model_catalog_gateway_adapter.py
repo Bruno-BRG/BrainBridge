@@ -26,3 +26,19 @@ def test_model_catalog_gateway_adapter_lists_supported_files_sorted_by_mtime():
 
         assert [model.name for model in models] == ["latest.keras", "older.h5"]
         assert models[0].path.endswith("latest.keras")
+
+
+def test_default_catalog_includes_canonical_models_without_duplicates(monkeypatch, tmp_path):
+    from brainbridge_v2.infrastructure.ml import model_catalog_gateway_adapter as catalog
+
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    model = canonical / "trained.keras"
+    model.write_bytes(b"checkpoint")
+    monkeypatch.setattr(catalog, "MODELS_DIR", canonical)
+    monkeypatch.chdir(tmp_path)
+    # The cwd/models discovery path aliases the canonical training directory.
+    (tmp_path / "models").symlink_to(canonical, target_is_directory=True)
+    adapter = catalog.FileSystemModelCatalogGatewayAdapter()
+    assert sum(p.resolve() == canonical.resolve() for p in adapter._candidate_dirs()) == 1
+    assert sum(m.path == str(model.resolve()) for m in adapter.list_models()) == 1

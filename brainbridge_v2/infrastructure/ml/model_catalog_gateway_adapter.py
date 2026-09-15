@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 from brainbridge_v2.domain.entities.model_metadata import ModelMetadata
+from brainbridge_v2.infrastructure.config.settings import MODELS_DIR
 
 
 class FileSystemModelCatalogGatewayAdapter:
@@ -54,6 +55,7 @@ class FileSystemModelCatalogGatewayAdapter:
             repo_root = Path(__file__).resolve().parents[3]
             cwd = Path.cwd()
             raw_dirs = [
+                MODELS_DIR,
                 repo_root / "bci" / "models",
                 repo_root / "models",
                 repo_root / "files",
@@ -68,7 +70,7 @@ class FileSystemModelCatalogGatewayAdapter:
         unique_dirs = []
         seen = set()
         for directory in raw_dirs:
-            normalized = str(directory)
+            normalized = str(directory.resolve())
             if normalized in seen:
                 continue
             seen.add(normalized)

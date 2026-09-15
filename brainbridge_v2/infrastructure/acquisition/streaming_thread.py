@@ -1,11 +1,9 @@
 import time
-import socket
 import json
 import numpy as np
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
 from brainbridge_v2.infrastructure.acquisition.udp_receiver import UDPReceiver_BCI
-from brainbridge_v2.infrastructure.signal_processing.butter_filter import ButterworthFilter
 
 class StreamingThread(QThread):
     """Thread para streaming de dados"""
@@ -20,17 +18,12 @@ class StreamingThread(QThread):
         self.data_queue = deque(maxlen=100)
         self.is_mock_mode = False
         
-        # Inicialização do filtro Butterworth
-        self.butter_filter = ButterworthFilter(
-            lowcut=0.5,    # 0.5 Hz - remove artefatos de movimento
-            highcut=50.0,  # 50 Hz - remove ruído elétrico
-            fs=125.0,      # 125 Hz - frequência de amostragem padrão OpenBCI
-            order=6        # Ordem 6 - filtros em cascata (3+3) para estabilidade
-        )
+        self.sample_rate = 125  # Source must be configured for Cyton + Daisy.
+        self.last_error = None
         
         # Inicialização do modelo
         self.model = None
-        self.window_size = 250  # 3.2s @ 125Hz
+        self.window_size = 250  # 2s @ 125Hz
         self.samples_since_last_prediction = 0
         self.predictions = deque(maxlen=50)  # Últimas predições
         self.eeg_buffer = deque(maxlen=1000)  # Buffer para dados EEG
@@ -40,6 +33,8 @@ class StreamingThread(QThread):
         """Inicia o streaming"""
         self.host = host
         self.port = port
+        self.last_error = None
+        self.is_mock_mode = False
         self.is_running = True
         self.start()
         
@@ -75,6 +70,9 @@ class StreamingThread(QThread):
             
             self.udp_receiver.set_callback(on_data_received)
             self.udp_receiver.start()
+            # UDPReceiver_BCI.start logs errors instead of raising them.
+            if not self.udp_receiver.is_running:
+                raise RuntimeError(f"UDP receiver failed to start on {self.host}:{self.port}")
             
             self.connection_status.emit(True)
             self.is_mock_mode = False
@@ -84,62 +82,26 @@ class StreamingThread(QThread):
                 time.sleep(0.1)
                 
         except Exception as e:
+            self.last_error = str(e)
             print(f"Erro no streaming UDP: {e}")
-            print("Iniciando modo de simulação...")
-            self.is_mock_mode = True
-            self.connection_status.emit(True)
-            
-            # Modo simulação - gerar dados fake
-            while self.is_running:
-                try:
-                    # Simular dados EEG (16 canais)
-                    fake_data = np.random.randn(16) * 50 + np.sin(time.time() * 2 * np.pi * 0.5) * 20
-                    self.data_received.emit(fake_data)
-                    time.sleep(1/125)  # Simular 125 Hz
-                except Exception as e:
-                    print(f"Erro na simulação: {e}")
-                    break
         
         finally:
+            self.is_running = False
             if self.udp_receiver:
                 self.udp_receiver.stop()
+                # Failed startup leaves a socket open because stop returns early.
+                if self.udp_receiver.socket is not None:
+                    self.udp_receiver.socket.close()
+                    self.udp_receiver.socket = None
             self.connection_status.emit(False)
     
     def extract_eeg_from_udp(self, data):
-        """Extrai dados EEG do formato UDP e aplica filtro Butterworth"""
-        try:
-            raw_eeg_data = self._extract_raw_eeg_from_udp(data)
-            
-            if raw_eeg_data is None:
-                return None
-            
-            # Aplicar filtro Butterworth aos dados extraídos
-            try:
-                if isinstance(raw_eeg_data, list):
-                    # Lista de amostras - filtrar cada uma
-                    filtered_samples = []
-                    for sample in raw_eeg_data:
-                        if len(sample) == 16:  # Verificar se tem 16 canais
-                            filtered_sample = self.butter_filter.apply_realtime_filter(sample)
-                            filtered_samples.append(filtered_sample)
-                        else:
-                            filtered_samples.append(sample)  # Manter original se não tem 16 canais
-                    return filtered_samples
-                else:
-                    # Amostra única - filtrar diretamente
-                    if len(raw_eeg_data) == 16:  # Verificar se tem 16 canais
-                        return self.butter_filter.apply_realtime_filter(raw_eeg_data)
-                    else:
-                        return raw_eeg_data  # Manter original se não tem 16 canais
-                        
-            except Exception as filter_error:
-                print(f"Erro ao aplicar filtro Butterworth: {filter_error}")
-                # Em caso de erro no filtro, retornar dados sem filtrar
-                return raw_eeg_data
-            
-        except Exception as e:
-            print(f"Erro ao extrair EEG: {e}")
-            return None
+        """Return all raw 16-channel samples; filtering belongs to consumers.
+
+        UDP values are expected in microvolts at 125 Hz. Packet arrival timing
+        is not a device sample clock, and runtime electrode montage is unknown.
+        """
+        return self._extract_raw_eeg_from_udp(data)
     
     def _extract_raw_eeg_from_udp(self, data):
         """Extrai dados EEG brutos do formato UDP (sem filtro)"""
@@ -155,52 +117,32 @@ class StreamingThread(QThread):
             if isinstance(data, dict):
                 # Formato timeSeriesRaw
                 if 'type' in data and data['type'] == 'timeSeriesRaw' and 'data' in data:
-                    timeseries = data['data']
-                    if len(timeseries) >= 16:
-                        # Processar todas as amostras (5 por canal)
-                        all_samples = []
-                        
-                        # Determinar o número de amostras (assumindo que todos os canais têm o mesmo)
-                        num_samples = len(timeseries[0]) if len(timeseries[0]) > 0 else 0
-                        
-                        # Para cada amostra temporal
-                        for sample_idx in range(num_samples):
-                            eeg_sample = []
-                            for ch in range(16):
-                                if sample_idx < len(timeseries[ch]):
-                                    eeg_sample.append(timeseries[ch][sample_idx])
-                                else:
-                                    eeg_sample.append(0.0)
-                            all_samples.append(np.array(eeg_sample))
-                        
-                        return all_samples  # Retorna lista de arrays
+                    timeseries = np.asarray(data['data'], dtype=float)
+                    if timeseries.ndim == 2 and timeseries.shape[0] == 16:
+                        return [sample.copy() for sample in timeseries.T]
                 
                 # Formato direto por canais
                 elif 'Ch1' in data:
-                    eeg_sample = []
-                    for ch in range(1, 17):
-                        ch_key = f'Ch{ch}'
-                        if ch_key in data:
-                            value = data[ch_key]
-                            if isinstance(value, list) and len(value) > 0:
-                                eeg_sample.append(value[-1])
-                            else:
-                                eeg_sample.append(float(value) if value is not None else 0.0)
-                        else:
-                            eeg_sample.append(0.0)
-                    return np.array(eeg_sample)
+                    values = [data[f'Ch{ch}'] for ch in range(1, 17)]
+                    if any(isinstance(value, list) for value in values):
+                        return self._extract_raw_eeg_from_udp(
+                            {'type': 'timeSeriesRaw', 'data': values}
+                        )
+                    if all(value is not None for value in values):
+                        return np.asarray(values, dtype=float)
                 
                 # Formato com channels
                 elif 'channels' in data:
                     return self._extract_raw_eeg_from_udp(data['channels'])
             
             # Se é lista, assumir que são os 16 canais
-            elif isinstance(data, list) and len(data) >= 16:
-                return np.array(data[:16])
+            elif isinstance(data, list) and len(data) == 16:
+                sample = np.asarray(data, dtype=float)
+                if sample.shape == (16,):
+                    return sample
             
             return None
             
         except Exception as e:
             print(f"Erro ao extrair EEG bruto: {e}")
             return None
-

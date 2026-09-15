@@ -2,7 +2,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGridLayout, QLabel,
                            QLineEdit, QDateEdit, QTextEdit, QPushButton, 
                            QGroupBox, QTableWidget, QTableWidgetItem, 
                            QHeaderView, QMessageBox, QHBoxLayout, 
-                           QComboBox, QSpinBox, QScrollArea)
+                           QComboBox, QSpinBox, QScrollArea, QInputDialog)
 from PyQt5.QtCore import QDate
 from PyQt5.QtGui import QFont
 from typing import Optional
@@ -12,9 +12,11 @@ from brainbridge_v2.presentation.gui.styles import Theme
 class PatientRegistrationWidget(QWidget):
     """Widget para cadastro de pacientes"""
     
-    def __init__(self, patient_controller: PatientController, parent=None):
+    def __init__(self, patient_controller: PatientController, parent=None, recording_controller=None):
         super().__init__(parent)
         self.patient_controller = patient_controller
+        # Opcional: usado para exibir sessões/nível (progressão). Sem ele, mostra "-".
+        self.recording_controller = recording_controller
         self.setup_ui()
         self.load_patients()
         
@@ -90,7 +92,9 @@ class PatientRegistrationWidget(QWidget):
         hand_label.setStyleSheet(label_style)
         hand_container.addWidget(hand_label)
         self.hand_combo = QComboBox()
-        self.hand_combo.addItems(["Esquerda", "Direita", "Ambas", "Nenhuma"])
+        self.hand_combo.addItem("Selecione...", None)
+        self.hand_combo.addItem("Esquerda", "left")
+        self.hand_combo.addItem("Direita", "right")
         self.hand_combo.setMinimumHeight(32)
         hand_container.addWidget(self.hand_combo)
         row2.addLayout(hand_container, 1)
@@ -150,11 +154,13 @@ class PatientRegistrationWidget(QWidget):
         patients_layout.setContentsMargins(8, 16, 8, 8)
         
         self.patients_table = QTableWidget()
-        self.patients_table.setColumnCount(7)
+        self.patients_table.setColumnCount(9)
         self.patients_table.setHorizontalHeaderLabels([
-            "ID", "Nome", "Idade", "Sexo", "Mão Afetada", "Tempo", "Cadastro"
+            "ID", "Nome", "Idade", "Sexo", "Mão Afetada", "Tempo", "Cadastro", "Sessões", "Nível"
         ])
         self.patients_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.patients_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.patients_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.patients_table.setAlternatingRowColors(True)
         self.patients_table.setShowGrid(False)
         
@@ -167,12 +173,21 @@ class PatientRegistrationWidget(QWidget):
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Mão
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Tempo
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Data
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Sessões
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Nível
         
         # Ajustar altura das linhas
         self.patients_table.verticalHeader().setDefaultSectionSize(28)
         self.patients_table.verticalHeader().setVisible(False)
         
         patients_layout.addWidget(self.patients_table)
+        self.update_hand_btn = QPushButton("Atualizar mão do paciente selecionado")
+        self.update_hand_btn.setEnabled(False)
+        self.update_hand_btn.clicked.connect(self.update_selected_patient_hand)
+        self.patients_table.itemSelectionChanged.connect(
+            lambda: self.update_hand_btn.setEnabled(bool(self.patients_table.selectedItems()))
+        )
+        patients_layout.addWidget(self.update_hand_btn)
         patients_group.setLayout(patients_layout)
         right_layout.addWidget(patients_group)
         
@@ -191,7 +206,10 @@ class PatientRegistrationWidget(QWidget):
             
         age = self.age_spin.value()
         sex = self.sex_combo.currentText()
-        affected_hand = self.hand_combo.currentText()
+        affected_hand = self.hand_combo.currentData()
+        if affected_hand is None:
+            QMessageBox.warning(self, "Validação", "Selecione a mão afetada: esquerda ou direita.")
+            return
         time_since_event = self.time_spin.value()
         notes = self.notes_edit.toPlainText()
         
@@ -224,6 +242,28 @@ class PatientRegistrationWidget(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "❌ Erro", f"Erro ao cadastrar paciente: {e}")
     
+    def _patient_session_count(self, patient_id) -> object:
+        """Sessões já realizadas (int) ou '-' sem recording_controller."""
+        if self.recording_controller is None:
+            return "-"
+        try:
+            return max(0, len(self.recording_controller.list_patient_recordings(int(patient_id))))
+        except Exception:
+            return "-"
+
+    def _patient_level(self, patient_id) -> object:
+        """Nível VR (0-11) derivado das sessões, ou '-' sem recording_controller."""
+        if self.recording_controller is None:
+            return "-"
+        try:
+            from brainbridge_v2.interface_adapters.presenters.streaming_presenter import ProgressionPresenter
+            count = self._patient_session_count(patient_id)
+            if not isinstance(count, int):
+                return "-"
+            return ProgressionPresenter.level_for_session_count(count)
+        except Exception:
+            return "-"
+
     def load_patients(self):
         """Carrega a lista de pacientes"""
         try:
@@ -236,14 +276,37 @@ class PatientRegistrationWidget(QWidget):
                 self.patients_table.setItem(row, 1, QTableWidgetItem(patient["name"]))
                 self.patients_table.setItem(row, 2, QTableWidgetItem(str(patient["age"])))
                 self.patients_table.setItem(row, 3, QTableWidgetItem(patient["sex"]))
-                self.patients_table.setItem(row, 4, QTableWidgetItem(patient["affected_hand"]))
+                hand_label = {"left": "Esquerda", "right": "Direita"}.get(patient["affected_hand"], "Não informada")
+                self.patients_table.setItem(row, 4, QTableWidgetItem(hand_label))
                 self.patients_table.setItem(row, 5, QTableWidgetItem(str(patient["time_since_event"])))
                 created_at = patient.get("created_at", "")
                 self.patients_table.setItem(row, 6, QTableWidgetItem(created_at[:10] if created_at else ""))
+                self.patients_table.setItem(row, 7, QTableWidgetItem(str(self._patient_session_count(patient["id"]))))
+                self.patients_table.setItem(row, 8, QTableWidgetItem(str(self._patient_level(patient["id"]))))
             
         except Exception as e:
             QMessageBox.critical(self, "❌ Erro", f"Erro ao carregar pacientes: {e}")
     
+    def update_selected_patient_hand(self):
+        patient_id = self.get_selected_patient()
+        if patient_id is None:
+            return
+        label, accepted = QInputDialog.getItem(
+            self, "Atualizar mão afetada", f"Paciente ID {patient_id}: selecione a mão afetada",
+            ["Selecione...", "Esquerda", "Direita"], 0, False,
+        )
+        if not accepted:
+            return
+        hand = {"Esquerda": "left", "Direita": "right"}.get(label)
+        if hand is None:
+            QMessageBox.warning(self, "Validação", "Selecione a mão afetada: esquerda ou direita.")
+            return
+        try:
+            self.patient_controller.update_patient_affected_hand(patient_id, hand)
+            self.load_patients()
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao atualizar mão afetada: {e}")
+
     def get_selected_patient(self) -> Optional[int]:
         """Retorna o ID do paciente selecionado"""
         current_row = self.patients_table.currentRow()

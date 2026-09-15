@@ -18,7 +18,15 @@ def test_register_marker_updates_t1_and_returns_external_signal():
     assert result["accepted"] is True
     assert result["state"].t1_count == 1
     assert result["external_signal"] == "trigger_left"
-    assert result["esp32_direction"] == "esquerda"
+    assert result["esp32_direction"] is None
+
+
+@pytest.mark.parametrize("task", ["jogo", "treino", "teste"])
+@pytest.mark.parametrize("marker,cue", [("T1", "trigger_left"), ("T2", "trigger_right")])
+def test_cues_preserve_unity_payload_but_never_authorize_serial(task, marker, cue):
+    result = RegisterMarkerUseCase(InMemoryMarkerStateStore()).execute(marker, task)
+    assert result["external_signal"] == cue
+    assert result["esp32_direction"] is None
 
 
 def test_register_marker_rejects_marker_during_baseline():

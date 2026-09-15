@@ -32,3 +32,14 @@ class ListPatientsUseCase:
     def execute(self) -> List[Patient]:
         return self._repository.list_all()
 
+
+class UpdatePatientAffectedHandUseCase:
+    def __init__(self, repository: PatientRepository):
+        self._repository = repository
+
+    def execute(self, patient_id: int, affected_hand: str) -> None:
+        Patient.validate_affected_hand(affected_hand)
+        if affected_hand is None:
+            raise ValueError("Selecione a mao afetada.")
+        if not self._repository.update_affected_hand(patient_id, affected_hand):
+            raise ValueError("Paciente nao encontrado.")

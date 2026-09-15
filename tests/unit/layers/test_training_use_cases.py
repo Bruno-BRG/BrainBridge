@@ -1,3 +1,5 @@
+import pytest
+
 from brainbridge_v2.application.use_cases.training_use_cases import (
     AutoLoadTrainedModelUseCase,
     TrainModelUseCase,
@@ -58,3 +60,26 @@ def test_training_use_cases_train_and_auto_load():
     assert auto_loaded_result.model_path.endswith("patient_7.keras")
     assert inference_gateway.loaded_paths == ["C:/models/patient_7.keras"]
     assert progress_messages == ["Preparando dados..."]
+
+
+@pytest.mark.parametrize("auto_load", [False, True])
+def test_training_failure_propagates_without_loading_model(auto_load):
+    error = RuntimeError("TensorFlow indisponivel")
+
+    class FailingTrainingGateway:
+        def train(self, csv_file_path, patient_id, progress_callback=None):
+            raise error
+
+    inference_gateway = FakeInferenceGateway()
+    inference_gateway.load_model("existing.keras")
+    gateway = FailingTrainingGateway()
+    use_case = (
+        AutoLoadTrainedModelUseCase(gateway, inference_gateway)
+        if auto_load else TrainModelUseCase(gateway)
+    )
+
+    with pytest.raises(RuntimeError, match="TensorFlow indisponivel") as raised:
+        use_case.execute("train.csv", 7)
+
+    assert raised.value is error
+    assert inference_gateway.loaded_paths == ["existing.keras"]

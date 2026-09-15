@@ -19,3 +19,6 @@ class PatientRepository(Protocol):
         """
         ...
 
+    def update_affected_hand(self, patient_id: int, affected_hand: str) -> bool:
+        """Updates only the affected hand; returns False if the patient is absent."""
+        ...

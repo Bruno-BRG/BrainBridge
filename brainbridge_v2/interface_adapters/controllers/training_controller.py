@@ -29,10 +29,12 @@ class TrainingController:
         train_model_use_case: TrainModelUseCase,
         auto_load_trained_model_use_case: AutoLoadTrainedModelUseCase,
         get_loaded_model_use_case: GetLoadedModelUseCase,
+        training_gateway=None,
     ):
         self._train_model_use_case = train_model_use_case
         self._auto_load_trained_model_use_case = auto_load_trained_model_use_case
         self._get_loaded_model_use_case = get_loaded_model_use_case
+        self._training_gateway = training_gateway
 
     @classmethod
     def from_gateways(
@@ -47,7 +49,18 @@ class TrainingController:
                 inference_gateway,
             ),
             get_loaded_model_use_case=GetLoadedModelUseCase(inference_gateway),
+            training_gateway=training_gateway,
         )
+
+    def patient_model_available(self, patient_id: int) -> bool:
+        """True se o paciente ja tem calibracao (modelo publicado e valido)."""
+        gateway = self._training_gateway
+        if gateway is None or not hasattr(gateway, "patient_model_available"):
+            return False
+        try:
+            return bool(gateway.patient_model_available(patient_id))
+        except Exception:
+            return False
 
     def train_model(
         self,

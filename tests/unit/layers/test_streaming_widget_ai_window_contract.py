@@ -48,7 +48,7 @@ def test_ai_window_resets_samples_collected_before_unity_marker():
     assert "_sync_ai_prediction_state" in calls
 
 
-def test_random_game_signal_sends_marker_before_opening_ai_window():
+def test_all_game_cues_open_window_in_marker_handler():
     widget = _streaming_widget_class()
 
     for method_name in ("send_next_random_signal", "game_random_action"):
@@ -60,10 +60,9 @@ def test_random_game_signal_sends_marker_before_opening_ai_window():
         ]
 
         assert "add_marker" in ordered_calls
-        assert "_start_ai_prediction_window" in ordered_calls
-        assert ordered_calls.index("add_marker") < ordered_calls.index(
-            "_start_ai_prediction_window"
-        )
+        assert "_start_ai_prediction_window" not in ordered_calls
+    marker = _method_node(widget, "add_marker")
+    assert "_start_ai_prediction_window" in [_call_name(n) for n in ast.walk(marker)]
 
 
 def test_streaming_widget_records_pipeline_events_for_critical_flow():

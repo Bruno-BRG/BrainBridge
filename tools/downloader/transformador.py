@@ -17,6 +17,10 @@ def processar_edf_para_openbci(diretorio_edf, filtragem, canais, algarismos_sign
     - filtragem = (low_freq, None) : Aplica apenas filtro passa-alta (high-pass)
     - filtragem = (None, high_freq) : Aplica apenas filtro passa-baixa (low-pass)
     - filtragem = None : Sem filtragem
+
+    A saida sempre usa 125 Hz (inclui anti-alias do resampling). A ordem dos
+    canais selecionados e preservada, mas a montagem do runtime e desconhecida:
+    nomes EDF nao comprovam correspondencia com os eletrodos da sessao real.
     """
 
     # Carregar arquivo EDF
@@ -41,6 +45,9 @@ def processar_edf_para_openbci(diretorio_edf, filtragem, canais, algarismos_sign
     else:  # Se lista não estiver vazia
         raw.pick(canais)  # Seleciona apenas os canais fornecidos
     
+    # Resample the signal before extracting samples or indexing annotations.
+    raw.resample(125.0)
+
     # Processamento dos dados
     dados, tempos = raw[:, :]
     dados_volts = dados * 1e6  # Converter para microV
@@ -78,7 +85,7 @@ def processar_edf_para_openbci(diretorio_edf, filtragem, canais, algarismos_sign
             
             # Calcular o índice da amostra correspondente
             # Sample Index começa em 1, então usamos sample_idx - 1 para o dataframe
-            sample_idx = int(onset_time * sfreq)
+            sample_idx = int(round((onset_time - raw.first_time) * sfreq))
             
             # Verificar se o índice está dentro dos limites
             if 0 <= sample_idx < len(df):
@@ -109,6 +116,9 @@ def processar_edf_para_openbci(diretorio_edf, filtragem, canais, algarismos_sign
             f"%OpenBCI Raw EXG Data\n"
             f"%Number of channels = {len(raw.ch_names)}\n"
             "%Sample Rate = 125 Hz\n"
+            f"%Signal Stage = {'filtered' if filtragem and any(f is not None for f in filtragem) else 'raw'}\n"
+            f"%Channel Names = {', '.join(raw.ch_names)}\n"
+            "%Runtime Montage = unknown; EDF channel names do not establish a match\n"
             "%Board = OpenBCI_GUI$BoardCytonSerialDaisy\n"
         )
         f.write(conteudo)
@@ -204,7 +214,7 @@ if __name__ == "__main__":
         # filtragem = (None, 60)   # Apenas low-pass em 60 Hz (remove frequências acima de 60 Hz)
         # filtragem = None         # Sem filtragem
         
-        filtragem = (0.5, None)  # Apenas high-pass em 0.5 Hz, sem low-pass
+        filtragem = None  # Preserve raw signal for the shared ML preprocessing.
         algarismos_significativos = 5
         
         # Processar toda a pasta recursivamente
@@ -214,4 +224,3 @@ if __name__ == "__main__":
             canais=canais_desejados,
             algarismos_significativos=algarismos_significativos
         )
-

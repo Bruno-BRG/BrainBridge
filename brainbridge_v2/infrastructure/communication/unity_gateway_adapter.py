@@ -4,7 +4,12 @@ Unity gateway adapter backed by the concrete Unity communicator.
 
 from typing import Callable
 
-from brainbridge_v2.infrastructure.communication.unity import UDP_sender, UnityCommunicator
+from brainbridge_v2.infrastructure.communication.unity import (
+    PatientData,
+    TaskType,
+    UDP_sender,
+    UnityCommunicator,
+)
 
 
 class UnityGatewayAdapter:
@@ -20,6 +25,37 @@ class UnityGatewayAdapter:
 
     def stop_server(self) -> None:
         self._communicator.stop_server()
+
+    @staticmethod
+    def _build_session_args(nome: str, nivel: int, lado: str, tarefa: str, sessoes: int = 0):
+        clean_nome = (nome or "").strip() or "Paciente"
+        try:
+            clean_nivel = int(nivel)
+        except (TypeError, ValueError):
+            clean_nivel = 5
+        clean_nivel = max(0, min(11, clean_nivel))
+        clean_lado = (lado or "").strip().capitalize()
+        if clean_lado not in ("Direito", "Esquerdo"):
+            lowered = (lado or "").strip().lower()
+            if lowered in ("right", "direita", "direito"):
+                clean_lado = "Direito"
+            else:
+                clean_lado = "Esquerdo"
+        task = TaskType.JOGO if (tarefa or "").strip().lower() == "jogo" else TaskType.TREINO
+        try:
+            clean_sessoes = int(sessoes)
+        except (TypeError, ValueError):
+            clean_sessoes = 0
+        clean_sessoes = max(0, clean_sessoes)
+        return PatientData(nome=clean_nome, nivel=clean_nivel, lado=clean_lado, sessoes=clean_sessoes), task
+
+    def start_session(self, nome: str, nivel: int, lado: str, tarefa: str, sessoes: int = 0) -> bool:
+        patient, task = self._build_session_args(nome, nivel, lado, tarefa, sessoes)
+        return self._communicator.start_session(patient, task)
+
+    def set_pending_session(self, nome: str, nivel: int, lado: str, tarefa: str, sessoes: int = 0) -> None:
+        patient, task = self._build_session_args(nome, nivel, lado, tarefa, sessoes)
+        self._communicator.set_pending_session(patient, task)
 
     def send_action(self, action: str) -> bool:
         return UDP_sender.enviar_sinal(action)

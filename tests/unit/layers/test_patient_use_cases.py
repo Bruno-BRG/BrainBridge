@@ -42,7 +42,7 @@ def test_register_patient_use_case_valid_input():
             name="Ana",
             age=34,
             sex="Feminino",
-            affected_hand="Esquerda",
+            affected_hand="left",
             time_since_event=12,
             notes="Teste",
         )
@@ -62,7 +62,7 @@ def test_register_patient_use_case_invalid_name():
                 name="  ",
                 age=30,
                 sex="Masculino",
-                affected_hand="Direita",
+                affected_hand="right",
                 time_since_event=6,
             )
         )
@@ -75,7 +75,7 @@ def test_list_patients_use_case_returns_entities():
             name="Carlos",
             age=40,
             sex="Masculino",
-            affected_hand="Direita",
+            affected_hand="right",
             time_since_event=24,
         )
     )
@@ -85,4 +85,3 @@ def test_list_patients_use_case_returns_entities():
 
     assert len(patients) == 1
     assert patients[0].name == "Carlos"
-

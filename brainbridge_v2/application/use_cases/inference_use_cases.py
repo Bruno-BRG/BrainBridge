@@ -94,9 +94,14 @@ class RunInferenceUseCase:
     def __init__(self, inference_gateway: InferenceGateway):
         self._inference_gateway = inference_gateway
 
-    def execute(self, eeg_window: Sequence[Sequence[float]]) -> PredictionResult:
+    def execute(self, eeg_window: Sequence[Sequence[float]], *,
+                input_fs: Optional[float] = None) -> PredictionResult:
         if len(eeg_window) == 0:
             raise ValueError("Janela EEG nao pode ser vazia.")
-        result = self._inference_gateway.predict(eeg_window)
+        try:
+            result = self._inference_gateway.predict(eeg_window, input_fs=input_fs)
+        except TypeError:
+            # Gateways legados/fakes sem input_fs.
+            result = self._inference_gateway.predict(eeg_window)
         result.validate()
         return result

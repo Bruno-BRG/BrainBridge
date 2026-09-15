@@ -3,6 +3,7 @@ import os
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from brainbridge_v2.infrastructure.config.settings import get_database_path
+from brainbridge_v2.domain.entities.patient import Patient
 
 class DatabaseManager:
     """Gerenciador do banco de dados SQLite para pacientes"""
@@ -14,7 +15,7 @@ class DatabaseManager:
         
         # Garantir que o diretório do banco existe
         db_dir = os.path.dirname(self.db_path)
-        if not os.path.exists(db_dir):
+        if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
             print(f"Diretório do banco criado: {db_dir}")
         
@@ -31,6 +32,7 @@ class DatabaseManager:
             
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            cursor.execute('BEGIN')
             
             # Criar tabela de pacientes
             cursor.execute('''
@@ -39,12 +41,29 @@ class DatabaseManager:
                     name TEXT NOT NULL,
                     age INTEGER NOT NULL,
                     sex TEXT NOT NULL,
-                    affected_hand TEXT NOT NULL,
+                    affected_hand TEXT CHECK (affected_hand IN ('left', 'right')),
                     time_since_event INTEGER NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     notes TEXT
                 )
             ''')
+
+            columns = {row[1]: row for row in cursor.execute('PRAGMA table_info(patients)')}
+            if 'affected_hand' not in columns:
+                cursor.execute("ALTER TABLE patients ADD COLUMN affected_hand TEXT CHECK (affected_hand IN ('left', 'right'))")
+            elif 'affected_hand_legacy' not in columns and (
+                columns['affected_hand'][3]
+                or cursor.execute("SELECT 1 FROM patients WHERE affected_hand NOT IN ('left', 'right') LIMIT 1").fetchone()
+            ):
+                # Retain original clinical values, IDs and recording references in place.
+                cursor.execute('ALTER TABLE patients RENAME COLUMN affected_hand TO affected_hand_legacy')
+                cursor.execute("ALTER TABLE patients ADD COLUMN affected_hand TEXT CHECK (affected_hand IN ('left', 'right'))")
+                cursor.execute("""
+                    UPDATE patients SET affected_hand = CASE lower(trim(affected_hand_legacy))
+                        WHEN 'esquerda' THEN 'left' WHEN 'left' THEN 'left'
+                        WHEN 'direita' THEN 'right' WHEN 'right' THEN 'right'
+                        ELSE NULL END
+                """)
             
             # Criar tabela de gravações
             cursor.execute('''
@@ -71,19 +90,29 @@ class DatabaseManager:
                 
         except Exception as e:
             print(f"[ERROR] Erro ao inicializar banco de dados: {e}")
+            if 'conn' in locals():
+                conn.rollback()
+                conn.close()
             raise
     
-    def add_patient(self, name: str, age: int, sex: str, affected_hand: str, 
+    def add_patient(self, name: str, age: int, sex: str, affected_hand: Optional[str],
                    time_since_event: int, notes: str = ""):
         """Adiciona um novo paciente"""
+        Patient(name, age, sex, affected_hand, time_since_event, notes).validate()
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            cursor.execute('''
-                INSERT INTO patients (name, age, sex, affected_hand, time_since_event, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (name, age, sex, affected_hand, time_since_event, notes))
+            columns = {row[1] for row in cursor.execute('PRAGMA table_info(patients)')}
+            fields = 'name, age, sex, affected_hand, time_since_event, notes'
+            values = [name, age, sex, affected_hand, time_since_event, notes]
+            if 'affected_hand_legacy' in columns:
+                fields += ', affected_hand_legacy'
+                values.append('')  # The original column may still have NOT NULL.
+            cursor.execute(
+                f"INSERT INTO patients ({fields}) VALUES ({', '.join('?' for _ in values)})",
+                values,
+            )
             
             patient_id = cursor.lastrowid
             conn.commit()
@@ -116,20 +145,35 @@ class DatabaseManager:
         """Retorna todos os pacientes"""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
             cursor.execute('SELECT * FROM patients ORDER BY created_at DESC')
             patients = cursor.fetchall()
             conn.close()
             
-            return [{"id": p[0], "name": p[1], "age": p[2], "sex": p[3], 
-                    "affected_hand": p[4], "time_since_event": p[5], 
-                    "created_at": p[6], "notes": p[7]} for p in patients]
+            fields = ('id', 'name', 'age', 'sex', 'affected_hand', 'time_since_event', 'created_at', 'notes')
+            return [{field: p[field] for field in fields} for p in patients]
                     
         except Exception as e:
             print(f"Erro ao buscar pacientes: {e}")
             return []
     
+    def update_patient_affected_hand(self, patient_id: int, affected_hand: str) -> bool:
+        Patient.validate_affected_hand(affected_hand)
+        if affected_hand is None:
+            raise ValueError("Selecione a mao afetada.")
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                cursor = conn.execute(
+                    'UPDATE patients SET affected_hand = ? WHERE id = ?',
+                    (affected_hand, patient_id),
+                )
+                return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def delete_patient(self, patient_id: int):
         """Remove um paciente do banco de dados"""
         try:
@@ -229,4 +273,3 @@ class DatabaseManager:
         except Exception as e:
             print(f"[ERROR] Erro ao buscar gravacoes: {e}")
             return []
-
