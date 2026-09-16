@@ -11,6 +11,18 @@ build/
 Output/
 .mplconfig/
 
+# Web UI + Tauri (Fase 2/3)
+webui/node_modules/
+webui/src-tauri/target/
+webui/src-tauri/gen/
+webui/src-tauri/binaries/brainbridge-server
+*.AppImage
+*.deb
+*.rpm
+*.msi
+*.exe
+target/
+
 # Virtual environments
 venv/
 env/

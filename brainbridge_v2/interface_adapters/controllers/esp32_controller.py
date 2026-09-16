@@ -41,6 +41,26 @@ class ESP32Controller:
     def connect(self) -> bool:
         return self._connect_use_case.execute()
 
+    def connect_report(self, port=None) -> dict:
+        gateway = self._gateway
+        report = gateway.connect_report(port) if hasattr(gateway, "connect_report") else None
+        if report is None:
+            connected = bool(self._connect_use_case.execute())
+            report = {"connected": connected}
+        return report
+
+    def get_port(self) -> str:
+        gateway = self._gateway
+        if hasattr(gateway, "get_port"):
+            return str(gateway.get_port())
+        return ""
+
+    def list_ports(self) -> list:
+        gateway = self._gateway
+        if hasattr(gateway, "list_ports"):
+            return list(gateway.list_ports() or [])
+        return []
+
     def disconnect(self) -> None:
         self._disconnect_use_case.execute()
 

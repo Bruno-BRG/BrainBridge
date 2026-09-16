@@ -630,6 +630,7 @@ class StreamingWidget(QWidget):
             self.developer_settings_btn.setText(label)
             self.developer_settings_btn.setStyleSheet(
                 Theme.btn_dev(self.developer_mode_enabled)
+                + " padding: 3px 8px; font-size: 11px; border-radius: 4px;"
             )
         
     @staticmethod
@@ -722,28 +723,29 @@ class StreamingWidget(QWidget):
         train_row.addWidget(self.btn_calib_esq, 1)
         train_row.addWidget(self.btn_calib_dir, 1)
         c1.addLayout(train_row)
-        cards_row.addWidget(card1, 1)
+        cards_row.addWidget(card1, 6)
 
-        # ---- CARD 2: Conexoes ----
+        # ---- CARD 2: Conexoes (compacto, alinhado ao topo) ----
         card2 = QGroupBox("2 · Conexões")
         c2 = QVBoxLayout(card2)
-        c2.setContentsMargins(8, 6, 8, 6)
-        c2.setSpacing(4)
+        c2.setContentsMargins(8, 4, 8, 4)
+        c2.setSpacing(3)
 
         conn_top = QHBoxLayout()
         conn_top.setSpacing(4)
         self.connect_btn = QPushButton("Conectar tudo")
-        self.connect_btn.setStyleSheet(T.btn_green("4px 8px", "12px", "600"))
+        self.connect_btn.setStyleSheet(T.btn_green("3px 8px", "11px", "600") + " border-radius: 4px;")
         self.connect_btn.clicked.connect(self.toggle_connection)
         self.developer_settings_btn = QPushButton("Dev: Off")
-        self.developer_settings_btn.setStyleSheet(T.btn_dev(False))
+        self.developer_settings_btn.setStyleSheet(
+            T.btn_dev(False) + " padding: 3px 8px; font-size: 11px; border-radius: 4px;")
         self.developer_settings_btn.clicked.connect(self.open_developer_settings)
         conn_top.addWidget(self.connect_btn, 1)
         conn_top.addWidget(self.developer_settings_btn, 0)
         c2.addLayout(conn_top)
 
         status_grid = QGridLayout()
-        status_grid.setSpacing(4)
+        status_grid.setSpacing(2)
         status_grid.setContentsMargins(0, 0, 0, 0)
         status_grid.setColumnStretch(0, 1)
         status_grid.setColumnStretch(1, 0)
@@ -773,7 +775,8 @@ class StreamingWidget(QWidget):
         status_grid.addWidget(self.status_ortese, 2, 0)
         status_grid.addWidget(self.connect_ortese_btn, 2, 1)
         c2.addLayout(status_grid)
-        cards_row.addWidget(card2, 1)
+        c2.addStretch(1)
+        cards_row.addWidget(card2, 5)
 
         # ---- CARD 3: Gravacao ----
         card3 = QGroupBox("3 · Gravação")
@@ -792,7 +795,7 @@ class StreamingWidget(QWidget):
         c3.addWidget(self.record_btn)
         c3.addWidget(self.gravacao_status)
         c3.addWidget(self.session_timer_label)
-        cards_row.addWidget(card3, 1)
+        cards_row.addWidget(card3, 5)
 
         layout.addLayout(cards_row)
 
@@ -1082,21 +1085,29 @@ class StreamingWidget(QWidget):
             panel.orthosis.style_sheet,
         )
         self.connect_btn.setText(panel.connect_button_text)
-        self.connect_btn.setStyleSheet(panel.connect_button_style)
+        self.connect_btn.setStyleSheet(
+            panel.connect_button_style
+            + " padding: 3px 8px; font-size: 11px; border-radius: 4px;")
         self.connect_btn.setEnabled(panel.connect_button_enabled)
         
-        # Atualizar botões individuais
+        # Atualizar botões individuais (compactos, iguais ao "Conectar tudo")
         if hasattr(self, 'connect_eeg_btn'):
             self.connect_eeg_btn.setText(panel.eeg_button_text)
-            self.connect_eeg_btn.setStyleSheet(panel.eeg_button_style)
+            self.connect_eeg_btn.setStyleSheet(
+                panel.eeg_button_style
+                + " padding: 3px 8px; font-size: 11px; border-radius: 4px;")
             self.connect_eeg_btn.setEnabled(panel.connect_button_enabled)
         if hasattr(self, 'connect_vr_btn'):
             self.connect_vr_btn.setText(panel.vr_button_text)
-            self.connect_vr_btn.setStyleSheet(panel.vr_button_style)
+            self.connect_vr_btn.setStyleSheet(
+                panel.vr_button_style
+                + " padding: 3px 8px; font-size: 11px; border-radius: 4px;")
             self.connect_vr_btn.setEnabled(panel.connect_button_enabled)
         if hasattr(self, 'connect_ortese_btn'):
             self.connect_ortese_btn.setText(panel.orthosis_button_text)
-            self.connect_ortese_btn.setStyleSheet(panel.orthosis_button_style)
+            self.connect_ortese_btn.setStyleSheet(
+                panel.orthosis_button_style
+                + " padding: 3px 8px; font-size: 11px; border-radius: 4px;")
             self.connect_ortese_btn.setEnabled(panel.connect_button_enabled)
             
         self.record_btn.setEnabled(panel.record_button_enabled)

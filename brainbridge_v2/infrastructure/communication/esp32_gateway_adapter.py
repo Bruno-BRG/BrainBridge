@@ -21,6 +21,39 @@ class ESP32GatewayAdapter:
     def connect(self) -> bool:
         return self._communicator.connect()
 
+    def connect_report(self, port: str | None = None) -> dict:
+        comm = self._communicator
+        if port:
+            comm.port = port
+        connected = bool(comm.connect())
+        report = {"connected": connected, "port": comm.port}
+        if not connected:
+            try:
+                available = [p[0] for p in comm.list_available_ports()]
+            except Exception:
+                available = []
+            if comm.port not in (available or []):
+                reason = f"Porta {comm.port} nao encontrada."
+                if available:
+                    reason += f" Disponiveis: {', '.join(available)}."
+                else:
+                    reason += " Nenhuma porta serial detectada."
+            else:
+                reason = f"Falha ao abrir {comm.port}. Verifique cabo, permissao e se outro programa usa a porta."
+            report["reason"] = reason
+            report["available_ports"] = available
+        return report
+
+    def get_port(self) -> str:
+        return str(self._communicator.port)
+
+    def list_ports(self) -> list:
+        try:
+            return [{"port": p[0], "description": p[1] if len(p) > 1 else ""}
+                    for p in self._communicator.list_available_ports()]
+        except Exception:
+            return []
+
     def disconnect(self) -> None:
         self._communicator.disconnect()
 

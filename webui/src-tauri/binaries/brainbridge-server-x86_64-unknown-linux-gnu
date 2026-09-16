@@ -1,0 +1,21 @@
+#!/bin/sh
+# Sidecar de DESENVOLVIMENTO: sobe o backend com o venv do repo.
+# No bundle final este arquivo e substituido pelo binario PyInstaller
+# (mesmo nome + sufixo do target). Uso: tauri dev.
+#
+# O Tauri copia o sidecar para target/debug/ em dev, entao o caminho nao
+# pode ser relativo fixo: sobe ate achar o marcador do repo.
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO="$DIR"
+for _ in 1 2 3 4 5 6; do
+  if [ -f "$REPO/brainbridge_v2/server/__main__.py" ] && [ -x "$REPO/.venv-dev/bin/python" ]; then
+    break
+  fi
+  REPO="$(CDPATH= cd -- "$REPO/.." && pwd)"
+done
+if [ ! -f "$REPO/brainbridge_v2/server/__main__.py" ]; then
+  echo "brainbridge-server: repo nao encontrado a partir de $DIR" >&2
+  exit 1
+fi
+cd "$REPO" || exit 1
+exec "$REPO/.venv-dev/bin/python" -m brainbridge_v2.server "$@"
