@@ -11,6 +11,7 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
+    watch: { ignored: ['**/src-tauri/target/**', '**/src-tauri/binaries/**'] },
     proxy: {
       '/api': { target: BACKEND, changeOrigin: true },
       '/ws': { target: BACKEND.replace(/^http/, 'ws'), ws: true, changeOrigin: true },
