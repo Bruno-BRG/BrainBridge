@@ -1,0 +1,54 @@
+{
+  "patient": "S012",
+  "files": [
+    "S012R03_csv_openbci.csv",
+    "S012R07_csv_openbci.csv",
+    "S012R08_csv_openbci.csv",
+    "S012R11_csv_openbci.csv",
+    "S012R12_csv_openbci.csv"
+  ],
+  "windows_per_file": [
+    56,
+    56,
+    56,
+    56,
+    56
+  ],
+  "test_windows": 112,
+  "zero_shot_same_test": {
+    "metrics_generalized_cnn.keras": 0.5804,
+    "generalized_left_right_eegmmidb_20260518_231607.keras": 0.5893,
+    "modelo_full.keras": 0.5089
+  },
+  "finetune": {
+    "model": "C:\\Users\\Chari\\OneDrive\\Documentos\\dev\\BrainBridge\\brainbridge_v2\\infrastructure\\data\\models\\metrics_S012_samepatient.keras",
+    "val_acc": 0.4583333432674408,
+    "train_acc": 0.8977272510528564,
+    "seconds": 4.7,
+    "epochs": 15,
+    "lr": 0.0001,
+    "files": [
+      "S012R03_csv_openbci.csv",
+      "S012R07_csv_openbci.csv"
+    ]
+  },
+  "test_base": 0.5804,
+  "test_ft": 0.5446,
+  "stream_file": "S012R08_csv_openbci.csv",
+  "stream_windows": 56,
+  "rl_k": 5,
+  "rl_batches_done": 3,
+  "rl_app_trajectory": [
+    0.5446,
+    0.5446,
+    0.5446,
+    0.5446
+  ],
+  "rl_fixed_trajectory": [
+    0.5446,
+    0.5446,
+    0.5446,
+    0.5446
+  ],
+  "note": "RL-APP usa janelas RAW como o frontend envia hoje. RL-FIX usa janelas pre-processadas iguais as do treino."
+}

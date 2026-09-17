@@ -1,0 +1,52 @@
+{
+  "generalized_dataset": {
+    "windows": 1008,
+    "groups": [
+      "physionet:S001",
+      "physionet:S003",
+      "physionet:S007"
+    ]
+  },
+  "generalized_train": {
+    "model": "C:\\Users\\Chari\\OneDrive\\Documentos\\dev\\BrainBridge\\brainbridge_v2\\infrastructure\\data\\models\\metrics_generalized_cnn.keras",
+    "val_acc": 0.5059523582458496,
+    "val_loss": 0.6917440295219421,
+    "train_acc": 0.8974999785423279,
+    "seconds": 97.2,
+    "heldout": [
+      "physionet:S001"
+    ],
+    "group_metrics": {
+      "physionet:S001": {
+        "accuracy": 0.5059523809523809,
+        "windows": 336.0
+      }
+    }
+  },
+  "specific_train": {
+    "model": "C:\\Users\\Chari\\OneDrive\\Documentos\\dev\\BrainBridge\\brainbridge_v2\\infrastructure\\data\\models\\metrics_specific_S012.keras",
+    "val_acc": 0.5357142686843872,
+    "train_acc": 0.9642857313156128,
+    "seconds": 4.9
+  },
+  "finetune_train": {
+    "model": "C:\\Users\\Chari\\OneDrive\\Documentos\\dev\\BrainBridge\\brainbridge_v2\\infrastructure\\data\\models\\metrics_finetuned_S011.keras",
+    "val_acc": 0.5416666865348816,
+    "train_acc": 0.6988636255264282,
+    "seconds": 3.1
+  },
+  "rl_sim": {
+    "n_train": 10,
+    "n_test": 30,
+    "acc_before": 0.4333,
+    "acc_after": 0.4333,
+    "delta": 0.0
+  },
+  "live": {
+    "windows": 3,
+    "ms_mean": 60.02,
+    "ms_max": 95.21
+  },
+  "api_health": 200,
+  "api_predict": 400
+}
