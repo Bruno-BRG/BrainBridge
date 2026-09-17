@@ -1,20 +1,84 @@
 flowchart TD
-    A[AQUISICAO<br/>Touca OpenBCI: 16 canais @ 125 Hz<br/>Backend FastAPI via WebSocket + grava CSV RAW]
-    B[JANELAMENTO<br/>Janela de 2 s = 250 amostras<br/>Modo Livre: nova janela a cada 1 s]
-    C[PRE-PROCESSAMENTO - igual nos 3 caminhos<br/>Reamostra para 125 Hz - Filtro 8 a 30 Hz - Z-score por canal]
-    D[MODELO BASE GENERALISTA<br/>CNN treinada em varios sujeitos - zero-shot ~0,64]
-    E[CALIBRACAO - 10 trials do paciente<br/>Fine-tuning: 10 epocas, LR 5e-5, aumento leve, peso de classe<br/>0,58 para 0,71]
-    F[INFERENCIA AO VIVO<br/>Uma janela, resposta instantanea<br/>So atua se confianca >= 0,6 e pausa de 3 s]
-    G[ATUACAO<br/>VR Unity via rede - Ortese ESP32 via serial l, e, o]
-    H[RL ONLINE<br/>Feedback em botoes ou CORRECT/WRONG do VR<br/>A cada 5 feedbacks ajusta em 2 plano - 0,71 para 0,73, pico 0,79]
-    A --> B --> C
-    C --> D
-    D --> E
-    C --> E
-    E --> F
-    C --> F
-    F --> G
-    F --> H
-    H -.atualiza o modelo em uso.-> F
-    classDef st fill:#e8f1fd,stroke:#1d4ed8,stroke-width:3px,color:#111;
-    class A,B,C,D,E,F,G,H st;
+    subgraph AQ[1 - AQUISICAO]
+        A1[Touca OpenBCI Daisy<br/>16 canais EXG @ 125 Hz<br/>rotulo 128 Hz e reamostrado]:::st
+        A2[Backend FastAPI + WebSocket<br/>streaming compacto do sinal]:::st
+        A3[Gravacao sempre RAW<br/>CSV OpenBCI + marcadores T0, T1, T2]:::st
+        A1 --> A2 --> A3
+    end
+    subgraph JAN[2 - JANELAMENTO]
+        J1[Janela de 2 s = 250 amostras<br/>stride 125, overlap 50 porcento]:::st
+        J2[Segmento T1 ate T0 = classe 0<br/>segmento T2 ate T0 = classe 1]:::st
+        J3[Minimo 2 trials por classe<br/>split por trial, sem vazamento]:::st
+        J1 --> J2 --> J3
+    end
+    subgraph PRE[3 - PRE-PROCESSAMENTO - raw-full16-sos6-zscore-v1]
+        P1[Entrada adaptativa<br/>qualquer fs de 1 a 2000 Hz<br/>qualquer numero de canais]:::st
+        P2[Reamostra para 125 Hz<br/>mapeia tudo para 16 canais]:::st
+        P3[Butterworth SOS ordem 6<br/>bandpass 8 a 30 Hz<br/>sosfiltfilt na janela fechada]:::st
+        P4[Z-score por canal<br/>saida float32 250 x 16]:::st
+        P5[Variante com EA<br/>bandpass, depois EA, depois z-score]:::st
+        P1 --> P2 --> P3 --> P4
+        P3 -.modelos com EA.-> P5 --> P4
+    end
+    subgraph M1[4 - MODELO 1 - BASE GENERALISTA]
+        M1A[generalized_left_right_eegmmidb<br/>CNN 1D adaptativa com GAP]:::st
+        M1B[Conv 64 k5 + BN + Pool, 2 blocos<br/>Conv 128 k3 + BN, GAP<br/>Dropout 0.3, Dense 64 relu<br/>Dense 2 softmax]:::st
+        M1C[Entrada N x 250 x 16<br/>2 classes T1 e T2, 780 KB]:::st
+        M1D[Zero-shot S011, S012, S016<br/>media 0,64 em 728 janelas]:::st
+        M1A --> M1B --> M1C --> M1D
+    end
+    subgraph FT[5 - CALIBRACAO - GERA O MODELO 2]
+        F1[Gate: minimo 10 trials T1 e T2<br/>sem isso o app pede o Treino]:::st
+        F2[Fine-tuning da rede toda<br/>parte do Modelo 1<br/>10 epocas, LR 5e-5]:::st
+        F3[Aumento so no treino: 2 replicas<br/>ruido gaussiano + shift temporal<br/>sem channel-dropout]:::st
+        F4[Peso de classe balanceado<br/>validacao intacta<br/>early stopping + decaimento de LR]:::st
+        F5[Salva patient_ID_candidate<br/>pointer patient_ID.json<br/>mostra delta base para novo]:::st
+        F6[S012: 0,58 para 0,71<br/>com 14 trials]:::st
+        F1 --> F2 --> F3 --> F4 --> F5 --> F6
+    end
+    subgraph M2[6 - MODELO 2 - MODELO DO PACIENTE]
+        N1[Mesma arquitetura do Modelo 1<br/>pesos personalizados do paciente]:::st
+        N2[Obrigatorio para Jogo e Livre<br/>manifesto .pipeline.json validado<br/>no carregamento]:::st
+        N1 --> N2
+    end
+    subgraph INF[7 - INFERENCIA AO VIVO - INSTANTANEA]
+        I1[Gateway + warmup<br/>worker Qt com 1 job pendente<br/>descarta resultado antigo]:::st
+        I2[Softmax devolve indice<br/>confianca e probabilidades<br/>latencia cerca de 60 ms]:::st
+        I3[So atua se confianca maior que 0,6<br/>e cooldown de 3 s]:::st
+        I4[Modo Jogo: 1 janela por trial<br/>com resposta esperada<br/>Modo Livre: loop continuo<br/>sinks opcionais]:::st
+        I1 --> I2 --> I3 --> I4
+    end
+    subgraph VR[8 - ATUACAO VR UNITY]
+        V1[Backend: ZMQ PUB 5555<br/>TCP 12345<br/>broadcast UDP 12346]:::st
+        V2[Unity CvMobClient<br/>descobre, conecta<br/>AnimationTrigger.HandleMessage]:::st
+        V3[Ida: paciente JSON<br/>Treino ou Jogo, Trigger<br/>HAND_CLOSE, END_TASK, END_SESSION]:::st
+        V4[Volta: Confirm<br/>CORRECT ou WRONG, confirm_end<br/>fila de veredictos, UI le a cada 1,5 s]:::st
+        V1 --> V2 --> V3 --> V4
+    end
+    subgraph ORT[9 - ATUACAO ORTESE ESP32]
+        O1[Serial 115200, protocolo 1-char<br/>esquerda vira l flexao<br/>direita vira e extensao]:::st
+        O2[m modo IA, o parar<br/>z automatico, p pausa<br/>r reset, w s d a calibracao]:::st
+        O3[Trava de trigger 3 s<br/>movimento 2 s + pausa 1 s]:::st
+        O4[Motores nos pinos 27, 14, 13, 12<br/>ATUAL: firmware com flexao igual a extensao<br/>em validacao com a eletronica]:::st
+        O1 --> O2 --> O3 --> O4
+    end
+    subgraph RL[10 - RL ONLINE - SEM MUDAR A UX]
+        R1[Feedback humano<br/>botoes certo e errado<br/>ou CORRECT e WRONG auto no Jogo]:::st
+        R2[A cada K igual a 5 feedbacks<br/>clone-fit-swap em background<br/>3 epocas LR 5e-5, erro pesa 3x<br/>mais 1 replica com ruido]:::st
+        R3[Guards: max 20 updates por sessao<br/>Restaurar base pre-RL]:::st
+        R4[S012: 0,71 para 0,73, pico 0,79<br/>S011: 0,54 para 0,75]:::st
+        R1 --> R2 --> R3 --> R4
+    end
+    A3 --> J1
+    J3 --> P1
+    P4 --> F2
+    M1D --> F2
+    F5 --> N1
+    N2 --> I1
+    P4 --> I1
+    I3 --> V1
+    I3 --> O1
+    I2 --> R1
+    V4 -.veredictos viram recompensa.-> R1
+    R4 -.atualiza o modelo em uso.-> I1
+    classDef st fill:#e8f1fd,stroke:#1d4ed8,stroke-width:2px,color:#111;
