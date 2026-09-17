@@ -53,7 +53,7 @@ class RLUpdateWorker(QRunnable):
     """Aplica 1 passo de RL (clone-fit-swap) fora da thread da UI."""
 
     def __init__(self, controller, windows, labels, weights, *, epochs, lr,
-                 freeze_backbone=True):
+                 freeze_backbone=True, augment=True):
         super().__init__()
         self.controller = controller
         self.windows = windows
@@ -62,6 +62,7 @@ class RLUpdateWorker(QRunnable):
         self.epochs = epochs
         self.lr = lr
         self.freeze_backbone = freeze_backbone
+        self.augment = augment
         self.signals = InferenceSignals()
 
     def run(self):
@@ -69,7 +70,8 @@ class RLUpdateWorker(QRunnable):
             result = self.controller.rl_online_update(
                 self.windows, self.labels, sample_weights=self.weights,
                 epochs=self.epochs, lr=self.lr,
-                freeze_backbone=self.freeze_backbone)
+                freeze_backbone=self.freeze_backbone,
+                augment=self.augment)
             self.signals.finished.emit(RLUpdateOutcome(
                 n=int(result.get("n", 0)), loss=result.get("loss"),
                 updates_applied=self.controller.rl_updates_count(),

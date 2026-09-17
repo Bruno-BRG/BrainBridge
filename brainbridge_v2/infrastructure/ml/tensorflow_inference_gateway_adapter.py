@@ -169,11 +169,17 @@ class TensorFlowInferenceGatewayAdapter:
 
     def rl_online_update(self, windows, labels, *, sample_weights=None,
                          epochs: int = 3, lr: float = 5e-5,
-                         freeze_backbone: bool = True) -> dict:
+                         freeze_backbone: bool = True,
+                         input_fs: Optional[float] = None,
+                         augment: bool = False) -> dict:
         """Aplica 1 passo de aprendizado com janelas rotuladas pelo feedback.
 
-        Clona o modelo, treina o clone (inferencia segue no original) e troca
-        sob lock. Erros devem chegar com peso maior via sample_weights.
+        As janelas chegam RAW (como na inferencia) e passam pelo mesmo
+        pre-processamento do treino antes do fit: Butterworth SOS ordem 6,
+        8-30 Hz, `sosfiltfilt` na janela fechada + z-score por canal (nos
+        modelos com EA, bandpass -> EA -> z-score). Clona o modelo, treina
+        o clone (inferencia segue no original) e troca sob lock. Erros
+        devem chegar com peso maior via sample_weights.
         Retorna {"n": int, "loss": float|None}.
         """
         import importlib as _il
@@ -181,14 +187,33 @@ class TensorFlowInferenceGatewayAdapter:
         adapter = self._adapter
         if adapter is None or getattr(adapter, "model", None) is None:
             raise RuntimeError("Nenhum modelo foi carregado para RL.")
-        X = np.asarray(
-            [np.asarray(w.tolist() if hasattr(w, "tolist") else w, dtype=np.float32)
-             for w in windows], dtype=np.float32)
-        y = np.asarray(labels, dtype=np.int32).reshape(-1)
-        if X.ndim != 3 or len(X) != len(y) or len(X) == 0:
+        if self._loaded_model is None:
+            raise RuntimeError("Nenhum modelo foi carregado para RL.")
+        fs = float(input_fs) if input_fs is not None else self._input_sample_rate
+        raw = [np.asarray(w.tolist() if hasattr(w, "tolist") else w, dtype=np.float64)
+               for w in windows]
+        if len(raw) == 0:
             raise ValueError("RL requer janelas (N,T,C) e labels nao vazios.")
-        if X.shape[-1] != CANONICAL_CHANNELS:
-            raise ValueError("RL requer 16 canais.")
+        for w in raw:
+            if w.ndim != 2 or w.shape[0] < 8 or w.shape[1] < 1 \
+                    or not np.isfinite(w).all():
+                raise ValueError("RL requer janelas (T, C) finitas com T>=8.")
+        X = np.stack(
+            [self._preprocess_raw_window(w, fs=fs) for w in raw]).astype(np.float32)
+        y = np.asarray(labels, dtype=np.int32).reshape(-1)
+        if augment and len(X) > 0:
+            # Estabilidade com poucas janelas: 1 replica com ruido leve
+            # (pos-zscore) herdando label e peso. UX inalterada.
+            rng = np.random.default_rng(42)
+            Xa = (np.asarray(X, dtype=np.float64)
+                    + rng.normal(0.0, 0.02, size=np.asarray(X).shape)).astype(np.float32)
+            X = np.concatenate([X, Xa], axis=0)
+            y = np.concatenate([y, y], axis=0)
+            if sample_weights is not None:
+                sw = np.asarray(sample_weights, dtype=np.float64).reshape(-1)
+                sample_weights = np.concatenate([sw, sw], axis=0)
+        if len(X) != len(y):
+            raise ValueError("RL requer um label por janela.")
         if set(np.unique(y)) - {0, 1}:
             raise ValueError("RL requer labels 0/1.")
 
@@ -228,18 +253,15 @@ class TensorFlowInferenceGatewayAdapter:
             loss = None
         return {"n": int(len(X)), "loss": loss}
 
-    def _predict(self, eeg_window: Sequence[Sequence[float]],
-                 *, input_fs: Optional[float] = None) -> PredictionResult:
-        if self._adapter is None or self._adapter.model is None or self._loaded_model is None:
-            raise RuntimeError("Nenhum modelo foi carregado para inferencia.")
+    def _preprocess_raw_window(self, window: np.ndarray, *,
+                               fs: float) -> np.ndarray:
+        """Pipeline canonica RAW -> (T, 16) pronta p/ o modelo.
 
-        fs = float(input_fs) if input_fs is not None else self._input_sample_rate
-        window = np.asarray(
-            eeg_window.tolist() if hasattr(eeg_window, "tolist") else eeg_window,
-            dtype=np.float64,
-        )
-        if window.ndim != 2 or not np.isfinite(window).all():
-            raise ValueError("Janela EEG invalida para inferencia.")
+        Identica ao treino (`trainer._create_windows_ht`): Butterworth SOS
+        ordem 6, 8-30 Hz, `sosfiltfilt` na janela fechada + z-score por
+        canal; nos modelos com EA, bandpass -> EA -> z-score. Inferencia
+        e RL passam por aqui para verem exatamente o mesmo sinal.
+        """
         expected_t = self._loaded_model.expected_time_steps
         expected_c = self._loaded_model.expected_channels or CANONICAL_CHANNELS
         # Qualquer combinacao de canais -> 16; qualquer fs -> canonico.
@@ -262,6 +284,21 @@ class TensorFlowInferenceGatewayAdapter:
         # Modelo adaptativo (None,16) aceita T variavel; modelo fixo exige T exato.
         if expected_t is not None and adapted_window.shape[0] != expected_t:
             adapted_window = self._adapt_window(adapted_window, expected_t, expected_c)
+        return adapted_window
+
+    def _predict(self, eeg_window: Sequence[Sequence[float]],
+                 *, input_fs: Optional[float] = None) -> PredictionResult:
+        if self._adapter is None or self._adapter.model is None or self._loaded_model is None:
+            raise RuntimeError("Nenhum modelo foi carregado para inferencia.")
+
+        fs = float(input_fs) if input_fs is not None else self._input_sample_rate
+        window = np.asarray(
+            eeg_window.tolist() if hasattr(eeg_window, "tolist") else eeg_window,
+            dtype=np.float64,
+        )
+        if window.ndim != 2 or not np.isfinite(window).all():
+            raise ValueError("Janela EEG invalida para inferencia.")
+        adapted_window = self._preprocess_raw_window(window, fs=fs)
         batch = adapted_window.reshape(1, adapted_window.shape[0], adapted_window.shape[1])
         raw_output = np.asarray(self._adapter.predict(batch), dtype="float32")
         if raw_output.shape not in ((1, 2), (2,)) or not np.isfinite(raw_output).all():

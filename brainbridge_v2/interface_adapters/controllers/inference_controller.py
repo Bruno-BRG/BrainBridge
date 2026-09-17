@@ -178,7 +178,10 @@ class InferenceController:
 
     def rl_online_update(self, windows, labels, *, sample_weights=None,
                          epochs: int = 3, lr: float = 5e-5,
-                         freeze_backbone: bool = True) -> dict:
+                         freeze_backbone: bool = True,
+                         input_fs: Optional[float] = None,
+                         augment: bool = False) -> dict:
         return self._rl_gateway().rl_online_update(
             windows, labels, sample_weights=sample_weights,
-            epochs=epochs, lr=lr, freeze_backbone=freeze_backbone)
+            epochs=epochs, lr=lr, freeze_backbone=freeze_backbone,
+            input_fs=input_fs, augment=augment)

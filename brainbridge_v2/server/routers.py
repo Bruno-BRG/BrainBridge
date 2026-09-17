@@ -251,10 +251,15 @@ async def rl_update(body: schemas.RLUpdate, request: Request):
     epochs = body.epochs if body.epochs is not None else int(get_runtime("rl_epochs", 3))
     lr = body.lr if body.lr is not None else float(get_runtime("rl_lr", 5e-5))
 
+    try:
+        rl_aug = bool(get_runtime("rl_augment", True))
+    except Exception:
+        rl_aug = True
     def _run():
         return container.inference_controller.rl_online_update(
             body.windows, body.labels, sample_weights=body.weights,
-            epochs=epochs, lr=lr, freeze_backbone=False)
+            epochs=epochs, lr=lr, freeze_backbone=False,
+            input_fs=body.input_fs, augment=rl_aug)
 
     try:
         result = await _asyncio.to_thread(_run)

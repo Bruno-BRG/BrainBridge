@@ -264,7 +264,7 @@ def _build_training_callbacks():
         ReduceLROnPlateau = getattr(tf_cb, 'ReduceLROnPlateau')
         callbacks = [
             EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True),
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=4, min_lr=1e-4)
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=4, min_lr=1e-6)
         ]
     except Exception:
         callbacks = []
@@ -383,7 +383,9 @@ def train_from_csvs(csv_files: List[str],
                     model_loader: Optional[Callable[[str], Any]] = None,
                     fine_tune_lr: Optional[float] = None,
                     freeze_backbone: bool = False,
-                    sample_weights: Optional[np.ndarray] = None) -> TrainResult:
+                    sample_weights: Optional[np.ndarray] = None,
+                    finetune_augment: bool = False,
+                    finetune_class_weight: bool = False) -> TrainResult:
     """Treina a partir de uma lista de CSVs OpenBCI.
 
     Salva o modelo em data/models e retorna métricas básicas.
@@ -421,6 +423,33 @@ def train_from_csvs(csv_files: List[str],
     groups = np.concatenate(all_groups)
     train_idx, val_idx = _split_trials(y, groups)
     X_train, X_val, y_train, y_val = X[train_idx], X[val_idx], y[train_idx], y[val_idx]
+
+    # Calibracao (fine-tuning no mesmo paciente, poucas trials): aumento leve
+    # no TREINO (ruido gaussiano pos-zscore + deslocamento temporal; sem
+    # channel-dropout - os canais sao os mesmos no uso real) e peso de classe
+    # balanceado. A validacao fica intacta (metrica honesta). So muda o fit
+    # por baixo dos panos; telas e fluxo ao vivo inalterados.
+    calib_class_weight = None
+    if base_model_path is not None and (finetune_augment or finetune_class_weight):
+        if finetune_class_weight:
+            n0 = int(np.sum(np.asarray(y_train) == 0))
+            n1 = int(np.sum(np.asarray(y_train) == 1))
+            if n0 > 0 and n1 > 0:
+                total = float(n0 + n1)
+                calib_class_weight = {0: total / (2.0 * n0), 1: total / (2.0 * n1)}
+        if finetune_augment:
+            rng = np.random.default_rng(42)
+            base_x = np.asarray(X_train, dtype=np.float64)
+            reps = []
+            for _ in range(2):
+                aug = base_x + rng.normal(0.0, 0.02, size=base_x.shape)
+                for i in range(len(aug)):
+                    shift = int(rng.integers(-8, 9))
+                    if shift:
+                        aug[i] = np.roll(aug[i], shift, axis=0)
+                reps.append(aug.astype(np.float32))
+            X_train = np.concatenate([np.asarray(X_train)] + reps, axis=0)
+            y_train = np.concatenate([np.asarray(y_train)] * 3, axis=0)
 
     # Construir modelo novo ou continuar fine-tuning a partir de um checkpoint.
     expected_input_shape = (window_size, X.shape[-1])
@@ -479,6 +508,8 @@ def train_from_csvs(csv_files: List[str],
         if len(weights) != len(X_train):
             raise ValueError("sample_weights deve ter uma entrada por janela de treino.")
         fit_kwargs["sample_weight"] = weights
+    if calib_class_weight is not None and "sample_weight" not in fit_kwargs:
+        fit_kwargs["class_weight"] = calib_class_weight
     history = model.fit(X_train, y_train, **fit_kwargs)
     try:
         eval_loss, eval_acc = model.evaluate(X_val, y_val, verbose=0)
@@ -764,7 +795,9 @@ class ModelTrainer:
                         base_model_path: Optional[str] = None,
                         fine_tune_lr: Optional[float] = None,
                         freeze_backbone: bool = False,
-                        sample_weights: Optional[np.ndarray] = None) -> TrainResult:
+                        sample_weights: Optional[np.ndarray] = None,
+                        finetune_augment: bool = False,
+                        finetune_class_weight: bool = False) -> TrainResult:
         """Encapsula a função de treinamento de lista de CSVs. (opções de fine-tuning ponderado inclusas)"""
         # Delegamos para a função já implementada acima para reuso
         return train_from_csvs(
@@ -778,6 +811,8 @@ class ModelTrainer:
             fine_tune_lr=fine_tune_lr,
             freeze_backbone=freeze_backbone,
             sample_weights=sample_weights,
+            finetune_augment=finetune_augment,
+            finetune_class_weight=finetune_class_weight,
         )
 
     def train_from_directory(self,

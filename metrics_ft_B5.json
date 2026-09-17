@@ -1,0 +1,16 @@
+{
+  "subject": "S012",
+  "epochs": 15,
+  "lr": 0.0001,
+  "aug": true,
+  "cw": true,
+  "test_mean": 0.5357,
+  "test_runs": [
+    0.5179,
+    0.5536
+  ],
+  "val_runs": [
+    0.5417,
+    0.625
+  ]
+}

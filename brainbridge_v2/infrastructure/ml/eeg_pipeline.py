@@ -65,7 +65,7 @@ def preprocess_window(window, *, sample_rate=125.0, band=(8.0, 30.0), apply_filt
 
 def preprocess_ea_window(window, whitening, *, input_fs: float = CANONICAL_SAMPLE_RATE,
                          band=CANONICAL_BAND) -> np.ndarray:
-    """Pipeline com EA: reamostra -> EA -> bandpass -> z-score -> (250, 16).
+    """Pipeline com EA: reamostra -> bandpass -> EA -> z-score -> (250, 16).
 
     Ordem conforme He & Wu / revisita 2025: o alinhamento usa janelas
     filtradas (sem DC), e o branqueamento precede a normalizacao final.
@@ -90,8 +90,8 @@ def preprocess_ea_window(window, whitening, *, input_fs: float = CANONICAL_SAMPL
                 data = data[s:s + CANONICAL_WINDOW_SAMPLES, :]
             else:
                 data = np.vstack([data, np.zeros((CANONICAL_WINDOW_SAMPLES - data.shape[0], data.shape[1]))])
-    data = apply_ea(data, whitening)
     data = bandpass_window(data, sample_rate=CANONICAL_SAMPLE_RATE, band=tuple(band))
+    data = apply_ea(data, whitening)
     if data.shape != (CANONICAL_WINDOW_SAMPLES, CANONICAL_CHANNELS):
         raise ValueError("EA pipeline requires canonical (250, 16) after resampling.")
     return zscore_window(data)
@@ -236,7 +236,7 @@ def parse_sample_rate_header(header: str) -> Optional[float]:
 # a covariancia media de cada dominio vira a identidade, removendo o shift
 # de segunda ordem entre sujeitos. Na literatura (revisita JNE 2025, MOABB)
 # o placement recomendado e: filtro temporal -> EA -> resto do pipeline.
-# Aqui: janela RAW -> EA -> bandpass 8-30 + z-score (preprocess_window).
+# Aqui: janela RAW -> bandpass 8-30 -> EA -> z-score (igual ao treino).
 # ---------------------------------------------------------------------------
 
 def ea_reference_matrix(windows, *, shrinkage: float = 1e-2) -> np.ndarray:

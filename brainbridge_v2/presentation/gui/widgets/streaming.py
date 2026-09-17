@@ -469,9 +469,13 @@ class StreamingWidget(QWidget):
             it["applied"] = True
         self._rl_labeled_since_update = 0
         try:
+            try:
+                rl_aug = bool(get_runtime("rl_augment", True))
+            except Exception:
+                rl_aug = True
             worker = RLUpdateWorker(self.inference_controller, windows, labels,
                                     weights, epochs=epochs, lr=lr,
-                                    freeze_backbone=False)
+                                    freeze_backbone=False, augment=rl_aug)
             worker.signals.finished.connect(self._on_rl_finished, Qt.QueuedConnection)
             self._rl_job = worker
             self._record_pipeline_event("RL_UPDATE_START", n=len(newly))

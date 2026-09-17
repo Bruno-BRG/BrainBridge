@@ -31,16 +31,26 @@
 - Jogo e Livre exigem modelo proprio do paciente (pointer
   `patient_{id}.json`); sem ele, o app oferece o Treino de calibracao
   (minimo de trials T1/T2 configuravel, default 10, em Dev).
-- Calibracao: fine-tune rede toda, LR 1e-4, 15 epocas (ablacao offline:
-  head-only nao move os pesos; valores em `runtime_config.get_runtime`).
+- Calibracao (padrao clinico: 10 trials T1/T2): fine-tune rede toda,
+  LR 5e-5, 10 epocas, aumento leve no treino (2 replicas com ruido
+  gaussiano pos-zscore + deslocamento temporal, sem channel-dropout)
+  + peso de classe balanceado; validacao intacta. Ablacao offline
+  (S012 mesmo paciente): 15ep/1e-4 overfita (val 0.46, TEST 0.53);
+  10ep/5e-5 + aumento estabiliza (TEST 0.56 misto, 0.71 intramodal).
+  Head-only nao move os pesos; valores em `runtime_config.get_runtime`.
   O dialogo mostra o delta base -> novo para mudanca visivel.
 - RL: com `rl_enabled` (Dev, default off), botoes ✓/✗ rotulam a ultima
   predicao nos dois modos; no Jogo, CORRECT/WRONG do VR vira recompensa
   automatica (so com resposta esperada, anti-pacote-atrasado). A cada K
   feedbacks (default 5) um worker aplica clone-fit-swap (3 epocas, LR 5e-5,
-  erro pesa 3x); limite de 20 updates/sessao + "Restaurar base" (checkpoint
+  erro pesa 3x) + 1 replica com ruido leve por update (estabilidade no fim
+  da sessao; S012: fim 0.68 -> 0.73, pico 0.79); limite de 20
+  updates/sessao + "Restaurar base" (checkpoint
   pre-RL). Formalmente e aprendizado online supervisionado pelo feedback
   (em binario, o ✗ revela o rotulo) — mais estavel que policy-gradient no Qt.
+  As janelas do feedback passam pelo mesmo pre-processamento do treino e
+  da inferencia (Butterworth SOS ordem 6, 8-30 Hz + z-score por canal;
+  bandpass -> EA -> z-score nos modelos com alinhamento).
 
 ## Ortesi (ESP32 CIMATEC)
 

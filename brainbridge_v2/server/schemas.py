@@ -96,6 +96,7 @@ class RLUpdate(BaseModel):
     weights: Optional[List[float]] = None
     epochs: Optional[int] = None
     lr: Optional[float] = None
+    input_fs: Optional[float] = None
 
 
 class TrainingStart(BaseModel):

@@ -50,7 +50,11 @@ class ModelTrainingGatewayAdapter:
         candidates = [
             path
             for path in self._models_dir.glob("*.keras")
-            if path.is_file() and not path.name.startswith("patient_")
+            if path.is_file()
+            and not path.name.startswith("patient_")
+            and not path.name.startswith("metrics_")
+            and "_candidate_" not in path.name
+            and not path.name.startswith(".")
         ]
         for path in sorted(candidates, key=lambda path: (path.stat().st_mtime, path.name), reverse=True):
             try:
@@ -150,6 +154,8 @@ class ModelTrainingGatewayAdapter:
                 epochs=calib_epochs,
                 fine_tune_lr=float(calib_lr) if calib_lr else None,
                 freeze_backbone=calib_freeze,
+                finetune_augment=True,
+                finetune_class_weight=True,
             )
             training_result = TrainingResult(
                 model_path=str(candidate),

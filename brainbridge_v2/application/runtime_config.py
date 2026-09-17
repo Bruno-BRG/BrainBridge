@@ -32,9 +32,9 @@ DEFAULT_RUNTIME_CONFIG = RuntimeConfig()
 # ---------------------------------------------------------------------------
 _CALIBRATION_DEFAULTS = {
     # Calibracao obrigatoria (1x por paciente)
-    "calib_trials_required": 10,  # trials T1/T2 minimos p/ treinar
-    "calib_epochs": 15,
-    "calib_lr": 1e-4,  # rede toda (ablacao: head-only nao move)
+    "calib_trials_required": 10,  # trials T1/T2 minimos p/ treinar (padrao clinico)
+    "calib_epochs": 10,  # ablacao S012: 10ep estavel; 15ep overfita (val 0.46)
+    "calib_lr": 5e-5,  # rede toda (ablacao: head-only nao move)
     "calib_freeze_backbone": False,
     # RL online (feedback humano durante a inferencia)
     "rl_enabled": False,
@@ -43,6 +43,7 @@ _CALIBRATION_DEFAULTS = {
     "rl_lr": 5e-5,
     "rl_max_updates": 20,  # trava de seguranca por sessao
     "rl_mistake_weight": 3.0,  # erro pesa mais que acerto
+    "rl_augment": True,  # 1 replica com ruido leve por update (estabilidade)
     "rl_buffer_max": 200,
 }
 

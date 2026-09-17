@@ -1,0 +1,31 @@
+{
+  "subject": "S012",
+  "base": "brainbridge_v2/infrastructure/data/models/metrics_generalized_cnn.keras",
+  "test_windows": 112,
+  "epochs": 10,
+  "ft_augment": true,
+  "ft_cw": true,
+  "lr": 5e-05,
+  "acc_base": 0.5803571428571429,
+  "ft_val": 0.4583333432674408,
+  "ft_train": 0.8068181872367859,
+  "acc_ft": 0.5714285714285714,
+  "rl_run": 8,
+  "rl_stream_windows": 56,
+  "rl_updates": 11,
+  "rl_trajectory": [
+    0.5714,
+    0.5446,
+    0.5179,
+    0.5268,
+    0.5179,
+    0.5536,
+    0.5804,
+    0.5982,
+    0.5893,
+    0.5804,
+    0.5893,
+    0.5804
+  ],
+  "rl_prequential": 0.5179
+}
