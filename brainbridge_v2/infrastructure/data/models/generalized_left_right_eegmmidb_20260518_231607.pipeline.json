@@ -1,0 +1,37 @@
+{
+  "pipeline_version": "raw-full16-sos6-zscore-v1",
+  "sample_rate": 125.0,
+  "channels": [
+    "EXG0",
+    "EXG1",
+    "EXG2",
+    "EXG3",
+    "EXG4",
+    "EXG5",
+    "EXG6",
+    "EXG7",
+    "EXG8",
+    "EXG9",
+    "EXG10",
+    "EXG11",
+    "EXG12",
+    "EXG13",
+    "EXG14",
+    "EXG15"
+  ],
+  "window_samples": 250,
+  "classes": {
+    "0": "T1",
+    "1": "T2"
+  },
+  "source_expectation": "raw",
+  "band": [
+    8.0,
+    30.0
+  ],
+  "apply_filter": true,
+  "training_source_stages": [
+    "unknown"
+  ],
+  "euclidean_alignment": false
+}

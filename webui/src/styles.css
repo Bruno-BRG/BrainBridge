@@ -378,6 +378,7 @@ textarea { resize: vertical; }
 .setting-toggle em { font-style: normal; font-size: 12px; font-weight: 700; color: var(--ink-soft); min-width: 74px; text-align: right; }
 .number-setting input { width: 130px; text-align: right; font-variant-numeric: tabular-nums; }
 .settings-side { display: flex; flex-direction: column; gap: 14px; }
+.settings-side { position: sticky; top: 0; align-self: start; max-height: calc(100vh - 220px); overflow-y: auto; }
 .settings-summary, .safety-panel { padding: 20px; }
 .settings-summary .primary-button { margin-top: 14px; }
 .settings-summary .secondary-button { margin-top: 8px; }

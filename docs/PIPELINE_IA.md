@@ -99,9 +99,11 @@ do checkpoint, para medir generalizacao e beneficio da personalizacao.
 
 ### Estado medido (multi-dataset, Leave-Subjects-Out)
 
-Modelo atual: `generalized_mi_multidataset_v3_eegnet` (EEGNet adaptativa,
-16ch @ 125 Hz, treino balanceado por grupo + aumento). Zero-shot em
-sujeitos nunca vistos: **val ~0.64** (BNCI ~0.68, PhysioNet ~0.5).
+Modelo atual: `generalized_left_right_eegmmidb_20260518_231607` (CNN 1D,
+16ch @ 125 Hz, unico .keras em `brainbridge_v2/infrastructure/data/models`).
+Zero-shot medido em 17/09 (S011/S012/S016, 728 janelas, `metrics_zeroshot.json`):
+**media 0.64** (S011 0.62, S012 0.61, S016 0.68). Candidatos removidos na
+mesma medicao: `metrics_generalized_cnn` 0.54, `modelo_full` 0.49 (chance).
 Detalhes e tentativas (v1–v7) em `tools/datasets/README.md`.
 Variância entre sujeitos domina (0.32–0.82 por sujeito/arquivo); por isso
 o fluxo recomendado é base generalizada + 2–3 sessões de Treino no
