@@ -1,8 +1,6 @@
 # Core dependencies
-PyQt5>=5.15.10
 numpy>=1.24.3
 pandas>=2.0.3
-pyqtgraph>=0.12.4
 tensorflow>=2.13.0
 
 # Communication

@@ -1,6 +1,5 @@
-"""BrainBridge HTTP + WebSocket server (Fase 1 da migracao Tauri).
+"""BrainBridge HTTP + WebSocket server (backend do app desktop Tauri).
 
-Reaproveita 100% da regra de negocio: os mesmos controllers/casos de uso
-da UI PyQt, sem nenhuma dependencia Qt. O frontend web (Fase 2) e o
-Tauri (Fase 3) falam com este backend via REST + WebSocket.
+Expoe a regra de negocio (controllers/casos de uso) via REST + WebSocket
+para o frontend Tauri/React. Sem dependencias de GUI.
 """

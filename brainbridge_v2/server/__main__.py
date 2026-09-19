@@ -1,6 +1,16 @@
 """Executa o backend: `python -m brainbridge_v2.server [--port 8000]`."""
 
 import argparse
+import sys
+
+# O sidecar Tauri tem stdout/stderr em pipe com encoding cp1252 no Windows:
+# qualquer `print()` com acento/emoji (ex.: "[ESP32] ✗ ...") estourava a
+# requisicao com UnicodeEncodeError. Forca UTF-8 antes de qualquer output.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import uvicorn
 

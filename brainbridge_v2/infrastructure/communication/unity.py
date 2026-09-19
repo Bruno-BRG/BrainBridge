@@ -21,6 +21,9 @@ import zmq
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, List, Callable
+import logging
+
+_log = logging.getLogger(__name__)
 
 # ========================================================================
 # ENUMS e CLASSES DE DADOS DO PROTOCOLO
@@ -282,7 +285,7 @@ class UnityCommunicator:
         Retorna True se iniciado com sucesso
         """
         if self._is_server_operational():
-            print("Servidor já está ativo", flush=True)
+            _log.info("Servidor já está ativo")
             return True
 
         try:
@@ -311,11 +314,11 @@ class UnityCommunicator:
 
             self.is_active = True
             self._transition_server_state(ServerState.RUNNING)
-            print(f"Servidor iniciado - ZMQ: {self.ZMQ_PORT}, TCP: {self.TCP_PORT}, UDP: {self.UDP_PORT}", flush=True)
+            _log.info(f"Servidor iniciado - ZMQ: {self.ZMQ_PORT}, TCP: {self.TCP_PORT}, UDP: {self.UDP_PORT}")
             return True
 
         except Exception as e:
-            print(f"Erro ao iniciar servidor: {e}", flush=True)
+            _log.info(f"Erro ao iniciar servidor: {e}")
             self.stop_server()
             return False
 
@@ -367,7 +370,7 @@ class UnityCommunicator:
         self.session.reset()
         self._sent_session_info = False
 
-        print("Servidor parado e recursos limpos", flush=True)
+        _log.info("Servidor parado e recursos limpos")
 
     def send_command(self, command: str) -> bool:
         """
@@ -376,7 +379,7 @@ class UnityCommunicator:
         Retorna True se enviado com sucesso
         """
         if not self.is_active and not self._is_server_operational():
-            print("Servidor não está ativo", flush=True)
+            _log.info("Servidor não está ativo")
             return False
 
         # Garantir que a mensagem termina com newline
@@ -387,28 +390,28 @@ class UnityCommunicator:
 
         # DEBUG: mostra a payload completa que será enviada
         try:
-            print(f"[SEND_COMMAND] Preparando para enviar (len={len(command)}): {command!r}", flush=True)
+            _log.info(f"[SEND_COMMAND] Preparando para enviar (len={len(command)}): {command!r}")
         except Exception:
-            print("[SEND_COMMAND] Preparando para enviar (impossível exibir payload)", flush=True)
+            _log.info("[SEND_COMMAND] Preparando para enviar (impossível exibir payload)")
 
         # Enviar via ZMQ (sempre disponível quando servidor ativo)
         if self.zmq_socket:
             try:
                 # ZMQ geralmente trabalha sem newline, mas enviamos mesmo assim (rstrip para visual)
                 self.zmq_socket.send_string(command.rstrip('\n'))
-                print(f"[ZMQ] Comando enviado: {command.rstrip()}", flush=True)
+                _log.info(f"[ZMQ] Comando enviado: {command.rstrip()}")
                 success = True
             except Exception as e:
-                print(f"[ZMQ] Erro ao enviar: {e}", flush=True)
+                _log.info(f"[ZMQ] Erro ao enviar: {e}")
 
         # Enviar via TCP se conectado
         if self.tcp_connected and self.tcp_connection:
             try:
                 self.tcp_connection.sendall(command.encode('utf-8'))
-                print(f"[TCP] Comando enviado: {command.rstrip()}", flush=True)
+                _log.info(f"[TCP] Comando enviado: {command.rstrip()}")
                 success = True
             except Exception as e:
-                print(f"[TCP] Erro ao enviar: {e}", flush=True)
+                _log.info(f"[TCP] Erro ao enviar: {e}")
                 self.tcp_connected = False
                 if self.on_connection_changed:
                     self.on_connection_changed(False)
@@ -431,7 +434,7 @@ class UnityCommunicator:
         elif hand.lower() in ['esquerda', 'left']:
             return self.send_command("LEFT_HAND_CLOSE")
         else:
-            print(f"Comando de mão inválido: {hand}", flush=True)
+            _log.info(f"Comando de mão inválido: {hand}")
             return False
 
     def send_trigger_command(self, hand: str) -> bool:
@@ -443,7 +446,7 @@ class UnityCommunicator:
         elif hand.lower() in ['esquerda', 'left']:
             return self.send_command("TRIGGER_LEFT")
         else:
-            print(f"Comando de trigger inválido: {hand}", flush=True)
+            _log.info(f"Comando de trigger inválido: {hand}")
             return False
 
     # ========================================================================
@@ -455,11 +458,11 @@ class UnityCommunicator:
         Envia dados do paciente e tipo de tarefa ao VR
         """
         if not self._is_server_operational():
-            print("Erro: Servidor não está ativo", flush=True)
+            _log.info("Erro: Servidor não está ativo")
             return False
 
         if not self.tcp_connected:
-            print("Erro: VR não está conectado", flush=True)
+            _log.info("Erro: VR não está conectado")
             return False
 
         # Validar paciente
@@ -467,37 +470,37 @@ class UnityCommunicator:
             if not isinstance(patient, PatientData):
                 raise ValueError("Paciente deve ser uma instância de PatientData")
         except Exception as e:
-            print(f"Erro ao validar paciente: {e}", flush=True)
+            _log.info(f"Erro ao validar paciente: {e}")
             return False
 
         # Atualizar estado da sessão e transição para setup
         self.session.patient = patient
         self.session.task_type = task_type
         if not self._transition_session_phase(SessionPhase.SETUP):
-            print(f"Erro: transição de sessão inválida para SETUP (estado atual: {self.session.phase})", flush=True)
+            _log.info(f"Erro: transição de sessão inválida para SETUP (estado atual: {self.session.phase})")
             return False
 
         # 1. Enviar dados do paciente em formato JSON
-        print(f"\n📋 Enviando dados do paciente (JSON)...", flush=True)
+        _log.info(f"\n📋 Enviando dados do paciente (JSON)...")
         patient_json = patient.to_json()
         # debug explícito antes de enviar
-        print(f"[START_SESSION] JSON do paciente a ser enviado: {patient_json}", flush=True)
+        _log.info(f"[START_SESSION] JSON do paciente a ser enviado: {patient_json}")
 
         if not self.send_command(patient_json):
-            print("Erro ao enviar dados do paciente", flush=True)
+            _log.info("Erro ao enviar dados do paciente")
             self.session.reset()
             return False
 
         time.sleep(0.3)  # Pequeno delay entre mensagens
 
         # 2. Enviar tipo de tarefa
-        print(f"📌 Enviando tipo de tarefa: {task_type.value}", flush=True)
+        _log.info(f"📌 Enviando tipo de tarefa: {task_type.value}")
         if not self.send_command(task_type.value):
-            print("Erro ao enviar tipo de tarefa", flush=True)
+            _log.info("Erro ao enviar tipo de tarefa")
             self.session.reset()
             return False
 
-        print("✅ Sessão iniciada com sucesso", flush=True)
+        _log.info("✅ Sessão iniciada com sucesso")
         # Marca como enviado para que o HEADER posterior do VR não duplique
         # o envio via _auto_send_session_info.
         self._sent_session_info = True
@@ -523,7 +526,7 @@ class UnityCommunicator:
             try:
                 self._auto_send_session_info()
             except Exception as e:
-                print(f"[PENDING_SESSION] Erro ao publicar sessão real: {e}", flush=True)
+                _log.info(f"[PENDING_SESSION] Erro ao publicar sessão real: {e}")
 
     def send_trigger(self) -> bool:
         """
@@ -531,14 +534,14 @@ class UnityCommunicator:
         Envia Trigger seguido de comando de mão para o lado do paciente
         """
         if not self._is_session_waiting_trigger():
-            print("Erro: Sessão não está pronta para trigger (esperado READY)", flush=True)
+            _log.info("Erro: Sessão não está pronta para trigger (esperado READY)")
             return False
         if not self.session.patient:
-            print("Erro: Sessão sem paciente configurado", flush=True)
+            _log.info("Erro: Sessão sem paciente configurado")
             return False
 
         trigger_cmd = TriggerCommand.START.value
-        print(f"🎯 Enviando trigger: {trigger_cmd}", flush=True)
+        _log.info(f"🎯 Enviando trigger: {trigger_cmd}")
         
         if not self.send_command(trigger_cmd):
             return False
@@ -547,7 +550,7 @@ class UnityCommunicator:
 
         # Enviar comando de fechar mão baseado no lado do paciente
         hand_command = ActionCommand.RIGHT_HAND_CLOSE if self.session.patient.lado == "Direito" else ActionCommand.LEFT_HAND_CLOSE
-        print(f"👋 Enviando comando: {hand_command.value}", flush=True)
+        _log.info(f"👋 Enviando comando: {hand_command.value}")
 
         success = self.send_command(hand_command.value)
 
@@ -562,7 +565,7 @@ class UnityCommunicator:
         Compatível com novo protocolo
         """
         if not self._is_session_active_for_commands():
-            print("Erro: Sessão não está ativa", flush=True)
+            _log.info("Erro: Sessão não está ativa")
             return False
 
         if lado.lower() in ['direita', 'right']:
@@ -570,7 +573,7 @@ class UnityCommunicator:
         elif lado.lower() in ['esquerda', 'left']:
             return self.send_command(ActionCommand.LEFT_HAND_CLOSE.value)
         else:
-            print(f"Lado inválido: {lado}", flush=True)
+            _log.info(f"Lado inválido: {lado}")
             return False
 
     def send_hand_open(self, lado: str) -> bool:
@@ -579,7 +582,7 @@ class UnityCommunicator:
         Compatível com novo protocolo - libera a mão do gatilho
         """
         if not self.is_active:
-            print("Erro: Servidor não está ativo", flush=True)
+            _log.info("Erro: Servidor não está ativo")
             return False
 
         if lado.lower() in ['direita', 'right']:
@@ -587,7 +590,7 @@ class UnityCommunicator:
         elif lado.lower() in ['esquerda', 'left']:
             return self.send_command("LEFT_HAND_OPEN")
         else:
-            print(f"Lado inválido: {lado}", flush=True)
+            _log.info(f"Lado inválido: {lado}")
             return False
 
     def send_flower_action(self, lado: str) -> bool:
@@ -600,7 +603,7 @@ class UnityCommunicator:
         elif lado.lower() in ['esquerda', 'left']:
             return self.send_command(ActionCommand.LEFT_FLOWER.value)
         else:
-            print(f"Lado inválido: {lado}", flush=True)
+            _log.info(f"Lado inválido: {lado}")
             return False
 
     def end_task(self, message: str = "") -> bool:
@@ -615,11 +618,11 @@ class UnityCommunicator:
         Formato: "END_TASK" ou "END_TASK,mensagem"
         """
         if self.session.phase != SessionPhase.ACTIVE:
-            print("Erro: Nenhuma tarefa ativa para finalizar", flush=True)
+            _log.info("Erro: Nenhuma tarefa ativa para finalizar")
             return False
 
         if not self.tcp_connected:
-            print("Erro: VR não está conectado", flush=True)
+            _log.info("Erro: VR não está conectado")
             return False
 
         # Construir mensagem conforme o protocolo do Unity
@@ -628,7 +631,7 @@ class UnityCommunicator:
         else:
             end_message = "END_TASK"
 
-        print(f"✋ Finalizando tarefa: {end_message}", flush=True)
+        _log.info(f"✋ Finalizando tarefa: {end_message}")
 
         success = self.send_command(end_message)
 
@@ -649,15 +652,15 @@ class UnityCommunicator:
         - end_session("Parabéns! Você acertou tudo!")  # Envia mensagem motivacional
         """
         if self.session.phase not in (SessionPhase.ACTIVE, SessionPhase.ENDING):
-            print("Erro: Nenhuma sessão ativa para finalizar", flush=True)
+            _log.info("Erro: Nenhuma sessão ativa para finalizar")
             return False
 
         if self.session.phase == SessionPhase.ACTIVE and not self._transition_session_phase(SessionPhase.ENDING):
-            print(f"Erro: transição inválida para ENDING (estado atual: {self.session.phase})", flush=True)
+            _log.info(f"Erro: transição inválida para ENDING (estado atual: {self.session.phase})")
             return False
 
         if not self.tcp_connected:
-            print("Erro: VR não está conectado", flush=True)
+            _log.info("Erro: VR não está conectado")
             return False
 
         # Se não houver mensagem, usa mensagem padrão
@@ -666,7 +669,7 @@ class UnityCommunicator:
 
         end_message = f"END_SESSION,{message}"
 
-        print(f"🎉 Finalizando sessão com mensagem: {end_message}", flush=True)
+        _log.info(f"🎉 Finalizando sessão com mensagem: {end_message}")
 
         success = self.send_command(end_message)
 
@@ -699,7 +702,7 @@ class UnityCommunicator:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-        print(f"[UDP] Iniciando broadcast: {ips}", flush=True)
+        _log.info(f"[UDP] Iniciando broadcast: {ips}")
 
         try:
             while not self.stop_event.is_set():
@@ -707,10 +710,10 @@ class UnityCommunicator:
                 sock.sendto(message, ('<broadcast>', self.UDP_PORT))
                 time.sleep(self.BROADCAST_INTERVAL)
         except Exception as e:
-            print(f"[UDP] Erro no broadcast: {e}", flush=True)
+            _log.info(f"[UDP] Erro no broadcast: {e}")
         finally:
             sock.close()
-            print("[UDP] Broadcast parado", flush=True)
+            _log.info("[UDP] Broadcast parado")
 
     def _tcp_server(self):
         """
@@ -723,12 +726,12 @@ class UnityCommunicator:
         try:
             sock.bind(('', self.TCP_PORT))
             sock.listen(1)
-            print(f"[TCP] Servidor ouvindo na porta {self.TCP_PORT}", flush=True)
+            _log.info(f"[TCP] Servidor ouvindo na porta {self.TCP_PORT}")
 
             while not self.stop_event.is_set():
                 try:
                     conn, addr = sock.accept()
-                    print(f"[TCP] Unity conectado de {addr}", flush=True)
+                    _log.info(f"[TCP] Unity conectado de {addr}")
 
                     self.tcp_connection = conn
                     self.tcp_connected = True
@@ -752,14 +755,14 @@ class UnityCommunicator:
                     continue
                 except Exception as e:
                     if not self.stop_event.is_set():
-                        print(f"[TCP] Erro no servidor: {e}", flush=True)
+                        _log.info(f"[TCP] Erro no servidor: {e}")
                     break
 
         except Exception as e:
-            print(f"[TCP] Erro ao iniciar servidor: {e}", flush=True)
+            _log.info(f"[TCP] Erro ao iniciar servidor: {e}")
         finally:
             sock.close()
-            print("[TCP] Servidor TCP parado", flush=True)
+            _log.info("[TCP] Servidor TCP parado")
 
     def _handle_tcp_connection(self, conn: socket.socket, addr):
         """
@@ -778,7 +781,7 @@ class UnityCommunicator:
                 try:
                     data = conn.recv(self.BUFFER_SIZE)
                     if not data:
-                        print("[TCP] Unity desconectou", flush=True)
+                        _log.info("[TCP] Unity desconectou")
                         break
 
                     chunk = data.decode('utf-8', errors='ignore')
@@ -790,20 +793,20 @@ class UnityCommunicator:
                         message = line.strip().strip('\r')
                         if not message:
                             continue
-                        print(f"[TCP] Recebido: {message}", flush=True)
+                        _log.info(f"[TCP] Recebido: {message}")
 
                         # Processar mensagens do novo protocolo
                         try:
                             self._process_vr_message(message)
                         except Exception as e:
-                            print(f"[TCP] Erro ao processar mensagem: {e}", flush=True)
+                            _log.info(f"[TCP] Erro ao processar mensagem: {e}")
 
                         # Callback genérico (compatibilidade) por mensagem
                         if self.on_message_received:
                             try:
                                 self.on_message_received(message)
                             except Exception as e:
-                                print(f"[TCP] Erro em on_message_received: {e}", flush=True)
+                                _log.info(f"[TCP] Erro em on_message_received: {e}")
 
                     # Evita crescimento ilimitado se VR nunca enviar newline
                     # (ex: SendPub sem '\\n'): processa como mensagem única
@@ -814,11 +817,11 @@ class UnityCommunicator:
                     if len(recv_buffer) > self.BUFFER_SIZE * 4:
                         fallback = recv_buffer.strip()
                         if fallback:
-                            print(f"[TCP] Recebido (sem newline, fallback): {fallback}", flush=True)
+                            _log.info(f"[TCP] Recebido (sem newline, fallback): {fallback}")
                             try:
                                 self._process_vr_message(fallback)
                             except Exception as e:
-                                print(f"[TCP] Erro ao processar fallback: {e}", flush=True)
+                                _log.info(f"[TCP] Erro ao processar fallback: {e}")
                             if self.on_message_received:
                                 try:
                                     self.on_message_received(fallback)
@@ -829,7 +832,7 @@ class UnityCommunicator:
                 except socket.timeout:
                     continue
                 except Exception as e:
-                    print(f"[TCP] Erro na recepção: {e}", flush=True)
+                    _log.info(f"[TCP] Erro na recepção: {e}")
                     break
 
         finally:
@@ -849,7 +852,7 @@ class UnityCommunicator:
             if self.on_connection_changed:
                 self.on_connection_changed(False)
 
-            print("[TCP] Conexão encerrada", flush=True)
+            _log.info("[TCP] Conexão encerrada")
 
     def _process_vr_message(self, message: str):
         """
@@ -865,27 +868,27 @@ class UnityCommunicator:
 
         # Reconhecer header enviado pelo Unity (ex: B;HEADER;0;;E ou HEADER)
         if "header" in msg_lower or message.strip().upper().startswith("B;HEADER"):
-            print(f"✅ VR enviou HEADER (gatilho para envio de sessão): {message}", flush=True)
+            _log.info(f"✅ VR enviou HEADER (gatilho para envio de sessão): {message}")
             # envia automaticamente os dados do paciente caso existam
             try:
                 self._auto_send_session_info()
             except Exception as e:
-                print(f"[PROCESS] Erro ao auto-enviar session info: {e}", flush=True)
+                _log.info(f"[PROCESS] Erro ao auto-enviar session info: {e}")
             return
 
         # Reconhecer "WRONG" - erro na ação
         if msg_lower == "wrong":
-            print("⚠️  VR registrou ação incorreta (WRONG)", flush=True)
+            _log.info("⚠️  VR registrou ação incorreta (WRONG)")
             return
 
         # Reconhecer "CORRECT" - acerto do usuário (GUI usa via on_message_received)
         if msg_lower == "correct":
-            print("✅ VR registrou ação correta (CORRECT)", flush=True)
+            _log.info("✅ VR registrou ação correta (CORRECT)")
             return
 
         # RESET vindo do VR (CvMobClient envia "B;RESET;E" ao receber RESET)
         if msg_lower == "b;reset;e" or msg_lower == "reset":
-            print("🔄 VR solicitou RESET", flush=True)
+            _log.info("🔄 VR solicitou RESET")
             return
 
         # Dados de tracking do CvMobClient ("B;<elapsed>;...;E"): ignora silenciosamente,
@@ -895,58 +898,58 @@ class UnityCommunicator:
 
         # Reconhecer TRIGGER commands que o VR pode enviar como feedback
         if msg_lower == "trigger_left":
-            print("🎯 VR enviou TRIGGER_LEFT (feedback)", flush=True)
+            _log.info("🎯 VR enviou TRIGGER_LEFT (feedback)")
             return
 
         if msg_lower == "trigger_right":
-            print("🎯 VR enviou TRIGGER_RIGHT (feedback)", flush=True)
+            _log.info("🎯 VR enviou TRIGGER_RIGHT (feedback)")
             return
 
         # Reconhecer ações de flor
         if "left_flower" in msg_lower:
-            print("🌸 VR acionou FLOR ESQUERDA", flush=True)
+            _log.info("🌸 VR acionou FLOR ESQUERDA")
             if self.on_flower_action:
                 self.on_flower_action(ActionCommand.LEFT_FLOWER)
             return
 
         if "right_flower" in msg_lower:
-            print("🌸 VR acionou FLOR DIREITA", flush=True)
+            _log.info("🌸 VR acionou FLOR DIREITA")
             if self.on_flower_action:
                 self.on_flower_action(ActionCommand.RIGHT_FLOWER)
             return
 
         # Confirmação de finalização de tarefa/sessão.
         if msg_lower == "confirm_end" or msg_lower == "confirmar_finalização" or "finalizar" in msg_lower:
-            print("✅ VR confirmou recebimento/finalização!", flush=True)
+            _log.info("✅ VR confirmou recebimento/finalização!")
             if self.on_confirmation:
                 try:
                     self.on_confirmation()
                 except Exception as e:
-                    print(f"[PROCESS] Erro em on_confirmation callback: {e}", flush=True)
+                    _log.info(f"[PROCESS] Erro em on_confirmation callback: {e}")
             if self.session.phase == SessionPhase.ENDING:
                 self.session.reset()
             return
 
         # Confirmação de setup: sessão pronta para trigger.
         if "confirm" in msg_lower:
-            print("✅ VR confirmou setup/recebimento!", flush=True)
+            _log.info("✅ VR confirmou setup/recebimento!")
             if self.session.phase == SessionPhase.SETUP:
                 self._transition_session_phase(SessionPhase.READY)
             if self.on_confirmation:
                 try:
                     self.on_confirmation()
                 except Exception as e:
-                    print(f"[PROCESS] Erro em on_confirmation callback: {e}", flush=True)
+                    _log.info(f"[PROCESS] Erro em on_confirmation callback: {e}")
             return
 
         # Reconhecer tipo de tarefa confirmado pelo VR - NOVO
         if msg_lower == "treino" or msg_lower == "jogo":
-            print(f"[TAREFA] VR confirmou tipo de tarefa: {msg_lower.upper()}", flush=True)
+            _log.info(f"[TAREFA] VR confirmou tipo de tarefa: {msg_lower.upper()}")
             return
 
         # Log genérico para mensagens não reconhecidas
         if message.strip():
-            print(f"📨 Mensagem VR não reconhecida: {message}", flush=True)
+            _log.info(f"📨 Mensagem VR não reconhecida: {message}")
 
     def _auto_send_session_info(self):
         """
@@ -960,19 +963,19 @@ class UnityCommunicator:
         try:
             # evita reenvio
             if getattr(self, "_sent_session_info", False):
-                print("[AUTO_SEND] Já enviou informações desta sessão (ignora).", flush=True)
+                _log.info("[AUTO_SEND] Já enviou informações desta sessão (ignora).")
                 return
 
             if not self.session:
-                print("[AUTO_SEND] Sessão não inicializada. Não envia.", flush=True)
+                _log.info("[AUTO_SEND] Sessão não inicializada. Não envia.")
                 return
 
             # Se não houver paciente ou tarefa, usa debug padrão
             if not self.session.patient or not self.session.task_type:
-                print("[AUTO_SEND] ⚙️  Usando paciente de DEBUG padrão (João, nível 5, esquerdo)", flush=True)
+                _log.info("[AUTO_SEND] ⚙️  Usando paciente de DEBUG padrão (João, nível 5, esquerdo)")
                 self.session.patient = PatientData(nome="João", nivel=5, lado="Esquerdo")
                 self.session.task_type = TaskType.TREINO
-                print("[AUTO_SEND] Sessão configurada com valores de debug", flush=True)
+                _log.info("[AUTO_SEND] Sessão configurada com valores de debug")
 
             # marca como enviado imediatamente para evitar race
             self._sent_session_info = True
@@ -986,11 +989,11 @@ class UnityCommunicator:
                     "lado": self.session.patient.lado,
                     "sessoes": getattr(self.session.patient, "sessoes", 0),
                 })
-                print(f"[AUTO_SEND] Enviando paciente (JSON): {patient_json}", flush=True)
+                _log.info(f"[AUTO_SEND] Enviando paciente (JSON): {patient_json}")
                 sent_json = self.send_command(patient_json)
-                print(f"[AUTO_SEND] send_command(JSON) -> {sent_json}", flush=True)
+                _log.info(f"[AUTO_SEND] send_command(JSON) -> {sent_json}")
             except Exception as e:
-                print(f"[AUTO_SEND] Erro ao montar/enviar JSON: {e}", flush=True)
+                _log.info(f"[AUTO_SEND] Erro ao montar/enviar JSON: {e}")
 
             # pequeno intervalo para ordenar pacotes
             time.sleep(0.12)
@@ -998,27 +1001,27 @@ class UnityCommunicator:
             # 2) Fallback legível (compatibilidade)
             try:
                 formatted = self.session.patient.format_message()
-                print(f"[AUTO_SEND] Enviando paciente (legível): {formatted!r}", flush=True)
+                _log.info(f"[AUTO_SEND] Enviando paciente (legível): {formatted!r}")
                 sent_f = self.send_command(formatted)
-                print(f"[AUTO_SEND] send_command(formatted) -> {sent_f}", flush=True)
+                _log.info(f"[AUTO_SEND] send_command(formatted) -> {sent_f}")
             except Exception as e:
-                print(f"[AUTO_SEND] Erro ao enviar formato legível: {e}", flush=True)
+                _log.info(f"[AUTO_SEND] Erro ao enviar formato legível: {e}")
 
             time.sleep(0.12)
 
             # 3) Tipo de tarefa
             try:
-                print(f"[AUTO_SEND] Enviando tipo de tarefa: {self.session.task_type.value}", flush=True)
+                _log.info(f"[AUTO_SEND] Enviando tipo de tarefa: {self.session.task_type.value}")
                 sent_t = self.send_command(self.session.task_type.value)
-                print(f"[AUTO_SEND] send_command(task_type) -> {sent_t}", flush=True)
+                _log.info(f"[AUTO_SEND] send_command(task_type) -> {sent_t}")
             except Exception as e:
-                print(f"[AUTO_SEND] Erro ao enviar tipo de tarefa: {e}", flush=True)
+                _log.info(f"[AUTO_SEND] Erro ao enviar tipo de tarefa: {e}")
 
             if self.session.phase == SessionPhase.IDLE:
                 self._transition_session_phase(SessionPhase.SETUP)
-            print("[AUTO_SEND] Informações da sessão enviadas automaticamente.", flush=True)
+            _log.info("[AUTO_SEND] Informações da sessão enviadas automaticamente.")
         except Exception as e:
-            print(f"[AUTO_SEND] Exceção geral: {e}", flush=True)
+            _log.info(f"[AUTO_SEND] Exceção geral: {e}")
 
     def set_message_callback(self, callback: Callable[[str], None]):
         """Define callback para mensagens recebidas"""
@@ -1065,7 +1068,7 @@ class UDP_sender:
             last = cls._last_sent_times.get(key)
             if last is not None and (now - last) < cls._debounce_seconds:
                 # skip duplicate
-                print(f"Debounce: pulando ação duplicada '{action}' (últim envio há {now-last:.3f}s)", flush=True)
+                _log.info(f"Debounce: pulando ação duplicada '{action}' (últim envio há {now-last:.3f}s)")
                 return False
             cls._last_sent_times[key] = now
         except Exception:
@@ -1115,10 +1118,10 @@ def main():
     communicator = UnityCommunicator()
 
     def on_message(message):
-        print(f"Mensagem recebida: {message}", flush=True)
+        _log.info(f"Mensagem recebida: {message}")
 
     def on_connection(connected):
-        print(f"Conexão: {'Conectado' if connected else 'Desconectado'}", flush=True)
+        _log.info(f"Conexão: {'Conectado' if connected else 'Desconectado'}")
 
     # Configurar callbacks
     communicator.set_message_callback(on_message)
@@ -1126,20 +1129,20 @@ def main():
 
     # Iniciar servidor
     if not communicator.start_server():
-        print("Falha ao iniciar servidor", flush=True)
+        _log.info("Falha ao iniciar servidor")
         return
 
-    print("\n" + "="*50, flush=True)
-    print("Sistema de Comunicação Unity Ativo", flush=True)
-    print("="*50, flush=True)
-    print("Comandos disponíveis:", flush=True)
-    print("  - direita       : Controla mão direita", flush=True)
-    print("  - esquerda      : Controla mão esquerda", flush=True)
-    print("  - trigger_right : Gatilho mão direita", flush=True)
-    print("  - trigger_left  : Gatilho mão esquerda", flush=True)
-    print("  - <comando>     : Comando personalizado", flush=True)
-    print("  - sair          : Encerra o programa", flush=True)
-    print("="*50, flush=True)
+    _log.info("\n" + "="*50)
+    _log.info("Sistema de Comunicação Unity Ativo")
+    _log.info("="*50)
+    _log.info("Comandos disponíveis:")
+    _log.info("  - direita       : Controla mão direita")
+    _log.info("  - esquerda      : Controla mão esquerda")
+    _log.info("  - trigger_right : Gatilho mão direita")
+    _log.info("  - trigger_left  : Gatilho mão esquerda")
+    _log.info("  - <comando>     : Comando personalizado")
+    _log.info("  - sair          : Encerra o programa")
+    _log.info("="*50)
 
     try:
         while True:
@@ -1159,10 +1162,10 @@ def main():
                 communicator.send_command(comando)
 
     except KeyboardInterrupt:
-        print("\nInterrompido pelo usuário", flush=True)
+        _log.info("\nInterrompido pelo usuário")
     finally:
         communicator.stop_server()
-        print("Programa encerrado", flush=True)
+        _log.info("Programa encerrado")
 
 
 if __name__ == '__main__':

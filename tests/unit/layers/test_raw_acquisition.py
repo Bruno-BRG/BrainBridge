@@ -4,7 +4,6 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import Qt
 
 from brainbridge_v2.infrastructure.acquisition import streaming_thread as streaming
 
@@ -48,8 +47,8 @@ def test_start_failure_never_emits_fake_data(monkeypatch, raises):
     thread = streaming.StreamingThread()
     thread.host, thread.port, thread.is_running = 'localhost', 12345, True
     samples, statuses = [], []
-    thread.data_received.connect(samples.append, Qt.DirectConnection)
-    thread.connection_status.connect(statuses.append, Qt.DirectConnection)
+    thread.data_received.connect(samples.append)
+    thread.connection_status.connect(statuses.append)
     thread.run()
     assert samples == []
     assert statuses == [False]
@@ -71,6 +70,6 @@ def test_run_emits_complete_raw_batch(monkeypatch):
     receiver.start = start
     monkeypatch.setattr(streaming, 'UDPReceiver_BCI', lambda *args: receiver)
     samples = []
-    thread.data_received.connect(samples.append, Qt.DirectConnection)
+    thread.data_received.connect(samples.append)
     thread.run()
     np.testing.assert_array_equal(samples, values.T)

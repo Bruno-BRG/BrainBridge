@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api.js';
 import { useEegStream } from '../useEeg.js';
+import { EegFilterBank } from '../filters.js';
 import { Notice, PanelHeading, StatusChip, loadLocalSettings, saveLocalSettings } from './ui.jsx';
 
 const CHANNEL_COLORS = [
@@ -82,6 +83,11 @@ function EegCanvas({ bufferRef, seconds, scale }) {
       }
       for (let ch = 0; ch < 16; ch += 1) {
         ctx.strokeStyle = CHANNEL_COLORS[ch];
+        // Slot delimitado estilo OpenBCI: o traço nunca invade o canal vizinho.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, ch * laneH, width, laneH);
+        ctx.clip();
         ctx.beginPath();
         // Decimação por coluna de pixel (min/max): tira o serrilhado e
         // reduz o trabalho por quadro sem mudar os dados.
@@ -110,7 +116,12 @@ function EegCanvas({ bufferRef, seconds, scale }) {
           }
         }
         ctx.stroke();
+        ctx.restore();
       }
+      // Escala do slot (vale para todos os canais).
+      ctx.fillStyle = 'rgba(170, 205, 220, 0.85)';
+      ctx.font = `${10 * ratio}px ui-monospace, monospace`;
+      ctx.fillText(`±${Math.round(fullScale)} µV/slot`, 5 * ratio, 12 * ratio);
     };
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
@@ -139,12 +150,19 @@ export default function Streaming({ active }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  const bufferRef = useRef([]); // amostras 16ch (plot)
-  const windowRef = useRef([]); // janela p/ inferencia
+  const bufferRef = useRef([]); // amostras 16ch filtradas (plot)
+  const windowRef = useRef([]); // janela RAW p/ inferencia (pipeline do backend)
   const inferBusy = useRef(false);
+  const filterRef = useRef(null); // EegFilterBank (notch 60Hz + BP 8-30Hz, só plot)
+  if (!filterRef.current) filterRef.current = new EegFilterBank(16);
   const feedbackBuf = useRef([]); // {window, pred, label?}
   const appliedRef = useRef(0);
   const lastPred = useRef(null);
+  // Tentativa guiada do modo livre: marca o inicio da tarefa (T1/T2),
+  // coleta 1 janela nova (250 amostras) e pausa a inferencia continua
+  // ate o reforco chegar. Equivale a trial do jogo, sem VR.
+  const trialRef = useRef(null); // {hand, samples, window, pred}
+  const [trialUi, setTrialUi] = useState(null); // {hand, phase, collected, predSide, conf}
   const [mirrorVr, setMirrorVr] = useState(true);
   const [mirrorOrt, setMirrorOrt] = useState(true);
 
@@ -194,6 +212,15 @@ export default function Streaming({ active }) {
     return () => clearInterval(timer);
   }, [refreshAll]);
 
+  // Ao voltar para a aba, limpa erro obsoleto (ex.: backend reiniciando)
+  // e atualiza os dados.
+  useEffect(() => {
+    if (active) {
+      setError('');
+      refreshAll();
+    }
+  }, [active, refreshAll]);
+
   // inferencia continua (modo online): janela 250, stride 125
   const runInference = useCallback(async (window) => {
     if (inferBusy.current || !model) return;
@@ -225,18 +252,52 @@ export default function Streaming({ active }) {
 
   const onBatch = useCallback((batch) => {
     const buf = bufferRef.current;
+    const filtersOn = local.plotFilters !== false;
     for (const sample of batch) {
-      buf.push(sample);
+      // Plot recebe o sinal filtrado (notch+BP); inferencia usa o RAW.
+      buf.push(filtersOn ? filterRef.current.processSample(sample) : Array.from(sample));
       windowRef.current.push(sample);
     }
     const cap = PLOT_BUFFER_SECONDS * 125 + 250;
     if (buf.length > cap) buf.splice(0, buf.length - cap);
+    // Tentativa do modo livre tem prioridade: coleta a janela da tarefa
+    // e pausa a inferencia continua ate o reforco (sem ambiguidade).
+    const trial = trialRef.current;
+    if (trial) {
+      if (windowRef.current.length > WINDOW) {
+        windowRef.current = windowRef.current.slice(-WINDOW);
+      }
+      if (!trial.window) {
+        for (const sample of batch) trial.samples.push(sample);
+        if (trial.samples.length >= WINDOW) {
+          trial.window = trial.samples.slice(0, WINDOW);
+          setTrialUi((u) => (u ? { ...u, phase: 'predicting', collected: WINDOW } : u));
+        } else {
+          const collected = trial.samples.length;
+          setTrialUi((u) => (u ? { ...u, collected } : u));
+        }
+      }
+      if (trial.window && trial.pred == null && !inferBusy.current) {
+        runInference(trial.window).then(() => {
+          const lp = lastPred.current;
+          if (lp && trialRef.current === trial && trial.pred == null) {
+            trial.pred = lp.pred;
+            setTrialUi({
+              hand: trial.hand, phase: 'awaiting', collected: WINDOW,
+              predSide: lp.pred === 0 ? 'ESQUERDA' : 'DIREITA', conf: null,
+            });
+            say(`Tentativa ${trial.hand === 'left' ? 'ESQUERDA' : 'DIREITA'}: a IA disse ${lp.pred === 0 ? 'ESQUERDA' : 'DIREITA'} — confirma?`);
+          }
+        });
+      }
+      return;
+    }
     if (windowRef.current.length >= WINDOW) {
       const window = windowRef.current.slice(-WINDOW);
       windowRef.current = windowRef.current.slice(-WINDOW + STRIDE);
       runInference(window);
     }
-  }, [runInference]);
+  }, [runInference, local.plotFilters]);
 
   const connectOpts = {
     host: local.eegHost || 'localhost',
@@ -287,6 +348,8 @@ export default function Streaming({ active }) {
     if (eegOn) {
       setEegOn(false);
       eegConnectAt.current = 0;
+      trialRef.current = null;
+      setTrialUi(null);
       try {
         await api.eegDisconnect();
       } catch (err) {
@@ -296,6 +359,9 @@ export default function Streaming({ active }) {
       setError('');
       setMessage('');
       eegConnectAt.current = Date.now() / 1000;
+      bufferRef.current = [];
+      windowRef.current = [];
+      if (filterRef.current) filterRef.current.reset();
       setEegOn(true);
     }
   };
@@ -388,11 +454,7 @@ export default function Streaming({ active }) {
       }
     } else {
       try {
-        const stopped = await fetch(`/api/recordings/${recording.id}/stop`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ duration_seconds: elapsed }),
-        }).then((r) => r.json()).then((b) => b.data);
+        const stopped = await api.recordingStop(recording.id, elapsed);
         try {
           await api.sessionEnd();
         } catch {
@@ -402,6 +464,9 @@ export default function Streaming({ active }) {
         const csvPath = stopped && stopped.csv_path;
         setRecording(null);
         setBaselineLeft(null);
+        trialRef.current = null;
+        setTrialUi(null);
+        stopCoach();
         try {
           await api.unityEndTask();
           if (wasTask === 'jogo') {
@@ -440,9 +505,17 @@ export default function Streaming({ active }) {
         const st = await api.trainingStatus(job.job_id);
         if (st.status === 'done') {
           const lines = (st.messages || []).slice(-4).join('\n');
-          say(`Treino concluído.\n${lines}`);
           const loaded = await api.loadedModel();
           setModel(loaded);
+          const res = st.result || {};
+          const bits = [];
+          if (res.val_accuracy != null) {
+            bits.push(`validação ${(Number(res.val_accuracy) * 100).toFixed(1)}%`);
+          } else if (res.final_accuracy != null) {
+            bits.push(`acurácia ${(Number(res.final_accuracy) * 100).toFixed(1)}%`);
+          }
+          if (loaded && loaded.name) bits.push(`modelo ${loaded.name} ativo`);
+          say(`Treino concluído com sucesso${bits.length ? ' · ' + bits.join(' · ') : ''}.\n${lines}`);
           break;
         }
         if (st.status === 'error') {
@@ -470,17 +543,112 @@ export default function Streaming({ active }) {
     }
   };
 
-  const sendFeedback = async (correct, via = 'manual') => {
-    const pending = [...feedbackBuf.current].reverse().find((f) => f.label === null);
-    if (!pending) {
-      if (via === 'manual') fail(new Error('Sem predição recente para rotular.'));
-      return false;
+  const cancelTrial = useCallback(() => {
+    trialRef.current = null;
+    setTrialUi(null);
+  }, []);
+
+  // Trocar de protocolo invalida a tentativa aberta.
+  useEffect(() => {
+    trialRef.current = null;
+    setTrialUi(null);
+    if (coachTimer.current) {
+      clearInterval(coachTimer.current);
+      coachTimer.current = null;
     }
-    pending.label = correct ? pending.pred : 1 - pending.pred;
-    const labeled = feedbackBuf.current.filter((f) => f.label !== null).length;
-    setRlLabeled(labeled);
-    if (via === 'manual') say(correct ? 'Feedback: acertou ✓' : 'Feedback: errou ✗');
-    // aplica sozinho a cada K feedbacks
+    setCoachUi(null);
+  }, [task]);
+
+  // Ensaio guiado do modo treino (vale para VR e para comando de voz sem VR):
+  // contagem regressiva -> tarefa ativa com banner grande -> descanso.
+  // O marcador T1/T2 é registrado no INICIO da fase ativa (fecha o segmento
+  // anterior e abre o da tarefa, no formato que o treino espera).
+  const COACH_TIMES = { countdown: 3, active: 6, rest: 4 };
+  const coachTimer = useRef(null);
+  const [coachUi, setCoachUi] = useState(null); // {hand, phase, remaining}
+  const stopCoach = useCallback(() => {
+    if (coachTimer.current) {
+      clearInterval(coachTimer.current);
+      coachTimer.current = null;
+    }
+    setCoachUi(null);
+  }, []);
+  useEffect(() => () => {
+    if (coachTimer.current) clearInterval(coachTimer.current);
+  }, []);
+  const startCoach = async (hand) => {
+    if (!recording) {
+      fail(new Error('Inicie a gravação do treino antes do ensaio.'));
+      return;
+    }
+    stopCoach();
+    const marker = hand === 'left' ? 'T1' : 'T2';
+    const side = hand === 'left' ? 'ESQUERDA' : 'DIREITA';
+    const phases = ['countdown', 'active', 'rest'];
+    let pi = 0;
+    let left = COACH_TIMES.countdown;
+    setCoachUi({ hand, phase: 'countdown', remaining: left });
+    say(`Ensaio ${side}: prepare-se…`);
+    coachTimer.current = setInterval(async () => {
+      left -= 1;
+      if (left > 0) {
+        setCoachUi({ hand, phase: phases[pi], remaining: left });
+        return;
+      }
+      pi += 1;
+      if (pi >= phases.length) {
+        stopCoach();
+        say('Ensaio concluído. Inicie outro ou encerre a gravação.');
+        return;
+      }
+      const phase = phases[pi];
+      left = COACH_TIMES[phase];
+      if (phase === 'active') {
+        try {
+          const reg = await api.marker(marker, 'treino');
+          if (reg.accepted) {
+            const st = await api.markerState();
+            setMarkers({ t1_count: st.t1_count || 0, t2_count: st.t2_count || 0 });
+          }
+          say(`AGORA: mova/imagine a mão ${side}!`);
+        } catch (err) {
+          stopCoach();
+          fail(err);
+          return;
+        }
+      } else if (phase === 'rest') {
+        say('Relaxe…');
+      }
+      setCoachUi({ hand, phase, remaining: left });
+    }, 1000);
+  };
+
+  // Abre uma tentativa no modo livre: marca T1/T2 (vai ao CSV se gravando)
+  // e coleta 250 amostras novas como janela da tarefa.
+  const startTrial = async (hand) => {
+    if (!eegOn) {
+      fail(new Error('Conecte o EEG antes de abrir a tentativa.'));
+      return;
+    }
+    const marker = hand === 'left' ? 'T1' : 'T2';
+    try {
+      const reg = await api.marker(marker, 'livre');
+      if (reg.accepted) {
+        const st = await api.markerState();
+        setMarkers({ t1_count: st.t1_count || 0, t2_count: st.t2_count || 0 });
+      }
+    } catch (err) {
+      fail(err);
+      return;
+    }
+    trialRef.current = { hand, samples: [], window: null, pred: null, feedLen: feedbackBuf.current.length };
+    windowRef.current = [];
+    setTrialUi({ hand, phase: 'collecting', collected: 0, predSide: null, conf: null });
+    say(`Tentativa ${hand === 'left' ? 'ESQUERDA' : 'DIREITA'} iniciada: colete 2s de sinal…`);
+  };
+
+  // Aplica RL quando ha K feedbacks rotulados (usado pelo reforco manual e da tentativa).
+  const maybeApplyRl = async () => {
     try {
       const cfg = await api.config();
       const batchK = Number(cfg.rl_batch_k || 5);
@@ -503,6 +671,50 @@ export default function Streaming({ active }) {
     } catch (err) {
       fail(err);
     }
+  };
+
+  const sendFeedback = async (correct, via = 'manual') => {
+    // Com tentativa aberta, o rotulo vem da tarefa pedida (exato no
+    // binario esq/dir), nao da predicao.
+    const trial = trialRef.current;
+    if (trial && trial.window && trial.pred != null) {
+      const intended = trial.hand === 'left' ? 0 : 1;
+      const label = correct ? intended : 1 - intended;
+      // Rotula a janela DA tentativa (itens anteriores a ela ficam intactos).
+      const from = trial.feedLen || 0;
+      let item = null;
+      for (let i = feedbackBuf.current.length - 1; i >= from; i -= 1) {
+        if (feedbackBuf.current[i].label === null) {
+          item = feedbackBuf.current[i];
+          break;
+        }
+      }
+      if (item) {
+        item.label = label;
+      } else {
+        feedbackBuf.current.push({
+          window: trial.window.map((row) => Array.from(row)), pred: trial.pred, label,
+        });
+      }
+      const labeled = feedbackBuf.current.filter((f) => f.label !== null).length;
+      setRlLabeled(labeled);
+      trialRef.current = null;
+      setTrialUi(null);
+      say(correct ? 'Tentativa confirmada: reforço positivo ✓' : 'Tentativa corrigida: reforço negativo ✗');
+      await maybeApplyRl();
+      return true;
+    }
+    const pending = [...feedbackBuf.current].reverse().find((f) => f.label === null);
+    if (!pending) {
+      if (via === 'manual') fail(new Error('Sem predição recente para rotular.'));
+      return false;
+    }
+    pending.label = correct ? pending.pred : 1 - pending.pred;
+    const labeled = feedbackBuf.current.filter((f) => f.label !== null).length;
+    setRlLabeled(labeled);
+    if (via === 'manual') say(correct ? 'Feedback: acertou ✓' : 'Feedback: errou ✗');
+    // aplica sozinho a cada K feedbacks
+    await maybeApplyRl();
     return true;
   };
 
@@ -564,6 +776,14 @@ export default function Streaming({ active }) {
   const sessionReady = patientReady && eegOn;
   const eegScale = Number(local.eegScale) || 100;
   const setEegScale = (value) => setLocal(saveLocalSettings({ eegScale: value }));
+  const plotFilters = local.plotFilters !== false;
+  const setPlotFilters = (value) => {
+    if (filterRef.current) {
+      filterRef.current.setEnabled(value);
+      filterRef.current.reset();
+    }
+    setLocal(saveLocalSettings({ plotFilters: value }));
+  };
 
   return (
     <div className="stream-layout">
@@ -612,13 +832,24 @@ export default function Streaming({ active }) {
 
       <Notice type="error">{error}</Notice>
       <Notice type="success">{message}</Notice>
+      {coachUi && (
+        <div className={`coach-banner ${coachUi.phase}`} role="status" aria-live="assertive">
+          <span className="coach-side">{coachUi.hand === 'left' ? 'ESQUERDA' : 'DIREITA'}</span>
+          <strong>
+            {coachUi.phase === 'countdown' && 'Prepare-se para mover…'}
+            {coachUi.phase === 'active' && 'MOVA / IMAGINE AGORA'}
+            {coachUi.phase === 'rest' && 'Relaxe…'}
+          </strong>
+          <span className="coach-count">{coachUi.remaining}s</span>
+        </div>
+      )}
       {eegStarved && <Notice type="error">{`Sem dados do OpenBCI há mais de 3s (${eeg.host || local.eegHost || 'localhost'}:${eeg.port || local.eegPort || 12345}, stream ${eeg.stream || local.eegStream || 'raw'}). Verifique o OpenBCI GUI. Nada foi gravado em modo sintético.`}</Notice>}
 
       <div className="live-workspace">
         <section className="signal-panel">
           <PanelHeading icon={Activity} title="Sinal EEG ao vivo" action={<div className="panel-badges"><StatusChip>16 canais</StatusChip><StatusChip>125 Hz</StatusChip><StatusChip tone={eegStatus.running ? 'positive' : ''} dot>{eegStatus.running ? eegStatus.mode : 'Aguardando'}</StatusChip></div>} />
           <div className="signal-canvas"><EegCanvas bufferRef={bufferRef} seconds={local.plotSeconds} scale={eegScale} /></div>
-          <div className="signal-footer"><span><Radio size={14} /> {eeg.running ? `${Number(eeg.samples || 0).toLocaleString('pt-BR')} amostras` : 'Sinal ainda não iniciado'}</span><span className="signal-options"><span>Janela de {local.plotSeconds}s</span><label className="scale-select">Escala<select value={eegScale} onChange={(e) => setEegScale(Number(e.target.value))} aria-label="Escala vertical em microvolts"><option value={50}>±50 μV</option><option value={100}>±100 μV</option><option value={250}>±250 μV</option></select></label></span></div>
+          <div className="signal-footer"><span><Radio size={14} /> {eeg.running ? `${Number(eeg.samples || 0).toLocaleString('pt-BR')} amostras` : 'Sinal ainda não iniciado'}</span><span className="signal-options"><span>Janela de {local.plotSeconds}s</span><label className="mirror-mini" title="Notch 60 Hz + passa-faixa 8-30 Hz (só visualização)"><input type="checkbox" checked={plotFilters} onChange={(e) => setPlotFilters(e.target.checked)} /><span className="switch tiny" />Filtros</label><label className="scale-select">Escala<select value={eegScale} onChange={(e) => setEegScale(Number(e.target.value))} aria-label="Escala vertical em microvolts"><option value={50}>±50 μV</option><option value={100}>±100 μV</option><option value={250}>±250 μV</option></select></label></span></div>
         </section>
 
         <aside className="insight-rail">
@@ -641,6 +872,49 @@ export default function Streaming({ active }) {
           <section className="surface markers-panel">
             <PanelHeading icon={Radio} title="Pistas da tarefa" action={<span className="marker-count">Esq {markers.t1_count} <i /> Dir {markers.t2_count}</span>}>Envia a pista ao VR e marca o treino.</PanelHeading>
             <div className="marker-actions"><button onClick={() => sendMarker('T1')}><ArrowDownLeft size={18} /><span><b>Esquerda</b></span></button><button onClick={() => sendMarker('T2')}><ArrowUpRight size={18} /><span><b>Direita</b></span></button></div>
+            {task === 'treino' && (
+              <div className="trial-block">
+                <div className="micro-label"><Play size={14} /> Ensaio guiado (voz ou VR)</div>
+                {!coachUi && (
+                  <div className="marker-actions">
+                    <button onClick={() => startCoach('left')} disabled={!recording}><ArrowDownLeft size={18} /><span><b>Ensaio Esquerda</b><small>3s preparo + 6s tarefa + 4s descanso</small></span></button>
+                    <button onClick={() => startCoach('right')} disabled={!recording}><ArrowUpRight size={18} /><span><b>Ensaio Direita</b><small>3s preparo + 6s tarefa + 4s descanso</small></span></button>
+                  </div>
+                )}
+                {coachUi && (
+                  <div className="trial-status">
+                    <span>Ensaio {coachUi.hand === 'left' ? 'ESQUERDA' : 'DIREITA'} em andamento…</span>
+                    <button className="compact-button" onClick={stopCoach}>Interromper</button>
+                  </div>
+                )}
+                {!recording && <p className="rl-detail">Inicie a gravação para habilitar os ensaios.</p>}
+              </div>
+            )}
+            {task === 'livre' && (
+              <div className="trial-block">
+                <div className="micro-label"><Play size={14} /> Tentativa guiada</div>
+                {!trialUi && (
+                  <div className="marker-actions">
+                    <button onClick={() => startTrial('left')} disabled={!eegOn}><ArrowDownLeft size={18} /><span><b>Iniciar tentativa Esquerda</b><small>marca T1 + janela de 2s</small></span></button>
+                    <button onClick={() => startTrial('right')} disabled={!eegOn}><ArrowUpRight size={18} /><span><b>Iniciar tentativa Direita</b><small>marca T2 + janela de 2s</small></span></button>
+                  </div>
+                )}
+                {trialUi && trialUi.phase !== 'awaiting' && (
+                  <div className="trial-status">
+                    <span>Tentativa {trialUi.hand === 'left' ? 'ESQUERDA' : 'DIREITA'}: coletando {Math.min(trialUi.collected, 250)}/250…</span>
+                    <span className="probability-track"><i style={{ width: `${Math.round((Math.min(trialUi.collected, 250) / 250) * 100)}%` }} /></span>
+                    <button className="compact-button" onClick={cancelTrial}>Descartar</button>
+                  </div>
+                )}
+                {trialUi && trialUi.phase === 'awaiting' && (
+                  <div className="trial-status">
+                    <span>Tentativa {trialUi.hand === 'left' ? 'ESQUERDA' : 'DIREITA'}: IA disse {trialUi.predSide} — confirme em “A IA acertou?”</span>
+                    <button className="compact-button" onClick={cancelTrial}>Descartar</button>
+                  </div>
+                )}
+                {trialUi && <p className="rl-detail">Inferência contínua pausada durante a tentativa.</p>}
+              </div>
+            )}
           </section>
         </aside>
       </div>

@@ -243,6 +243,21 @@ textarea { resize: vertical; }
 .marker-actions button:hover { border-color: var(--cobalt); background: var(--cobalt-wash); }
 .marker-actions b { display: block; font-size: 15px; }
 .marker-actions small { color: var(--ink-soft); font-size: 11.5px; }
+.marker-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+.trial-block { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.trial-block .micro-label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 8px; }
+.trial-status { display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
+.trial-status .probability-track { display: block; height: 6px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.trial-status .probability-track i { display: block; height: 100%; background: var(--cobalt); }
+/* Banner grande do ensaio guiado (treino): indica quando mover/relaxar. */
+.coach-banner { display: flex; align-items: center; gap: 16px; border-radius: 14px; padding: 16px 20px; margin-bottom: 14px; border: 2px solid var(--line); background: var(--surface); }
+.coach-banner .coach-side { font-family: var(--mono); font-weight: 800; font-size: 15px; padding: 6px 12px; border-radius: 8px; background: var(--ink); color: #fff; white-space: nowrap; }
+.coach-banner strong { flex: 1; font-size: 24px; letter-spacing: 0.02em; }
+.coach-banner .coach-count { font-family: var(--mono); font-weight: 800; font-size: 30px; }
+.coach-banner.countdown { border-color: #d69e2e; background: #fefcbf; }
+.coach-banner.active { border-color: #38a169; background: #c6f6d5; animation: coach-pulse 1s ease-in-out infinite; }
+.coach-banner.rest { border-color: var(--line); background: var(--surface); }
+@keyframes coach-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.015); } }
 /* ---------- patients ---------- */
 .patients-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
 .patient-directory { padding: 18px; position: sticky; top: 18px; }

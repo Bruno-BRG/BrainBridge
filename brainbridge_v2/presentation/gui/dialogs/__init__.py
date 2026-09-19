@@ -1,3 +1,0 @@
-"""
-Diálogos da interface
-"""

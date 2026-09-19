@@ -27,7 +27,6 @@ hidden += collect_submodules("numpy")
 hidden += collect_submodules("scipy")
 hidden += collect_submodules("sklearn")
 hidden += collect_submodules("pandas")
-hidden += collect_submodules("pyqtgraph")
 hidden += collect_submodules("matplotlib")
 hidden += collect_submodules("seaborn")
 hidden += collect_submodules("pyzmq")
@@ -54,7 +53,6 @@ if RESOURCES.exists():
 
 # Matplotlib needs its data directory
 datas += collect_data_files("matplotlib")
-datas += collect_data_files("pyqtgraph")
 datas += collect_data_files("seaborn")
 
 # ---------------------------------------------------------------------------

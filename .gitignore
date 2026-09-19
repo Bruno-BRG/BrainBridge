@@ -70,3 +70,6 @@ tools/datasets/data/
 brainbridge_v2/data/datasets/
 # Checkpoints treinados (binarios grandes; ver docs/PIPELINE_IA.md)
 *.keras
+
+# Projeto Unity externo (3,9 GB; repositorio proprio)
+CC_BCI_Maos_Integrado-main/

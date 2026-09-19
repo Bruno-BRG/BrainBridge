@@ -76,10 +76,10 @@ void moverFlexao() {
 
 void moverExtensao() {
   // Motor 1 puxa (Esquerda) / Motor 2 desenrola (Esquerda)
-  digitalWrite(pinoIN1_E, HIGH);
-  digitalWrite(pinoIN2_E, LOW);
-  digitalWrite(pinoIN3_F, HIGH);
-  digitalWrite(pinoIN4_F, LOW);
+  digitalWrite(pinoIN1_E, LOW);
+  digitalWrite(pinoIN2_E, HIGH);
+  digitalWrite(pinoIN3_F, LOW);
+  digitalWrite(pinoIN4_F, HIGH);
 }
 
 void pararTudo() {

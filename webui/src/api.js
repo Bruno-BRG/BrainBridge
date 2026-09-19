@@ -10,10 +10,15 @@ const TAURI_API =
     : '';
 
 async function request(path, options = {}) {
-  const response = await fetch(`${TAURI_API}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(`${TAURI_API}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+  } catch {
+    throw new Error('Não foi possível falar com o backend local. Verifique se o serviço está rodando.');
+  }
   let body = null;
   try {
     body = await response.json();

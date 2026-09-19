@@ -17,7 +17,7 @@ function parseMetrics(messages) {
   return { valAccuracy, delta };
 }
 
-export default function Training() {
+export default function Training({ active }) {
   const [csv, setCsv] = useState('');
   const [patientId, setPatientId] = useState('');
   const [check, setCheck] = useState(null);
@@ -40,6 +40,7 @@ export default function Training() {
       setModels(list || []);
       setLoaded(current || null);
       setPatients(patientList || []);
+      setError('');
     } catch (err) {
       fail(err);
     }
@@ -49,6 +50,12 @@ export default function Training() {
     refreshModels();
     return () => clearInterval(timerRef.current);
   }, []);
+
+  // Ao voltar para a aba, atualiza e limpa erro obsoleto (ex.: backend
+  // estava reiniciando quando a ultima chamada falhou).
+  useEffect(() => {
+    if (active) refreshModels();
+  }, [active]);
 
   useEffect(() => {
     clearInterval(timerRef.current);

@@ -20,7 +20,7 @@ export function StatusChip({ children, tone = '', dot = false }) {
 }
 
 const LOCAL_KEY = 'brainbridge.localSettings';
-export const DEFAULT_LOCAL = { eegHost: 'localhost', eegPort: 12345, eegSimulate: false, eegStream: 'raw', plotSeconds: 8, eegScale: 100, esp32Port: '' };
+export const DEFAULT_LOCAL = { eegHost: 'localhost', eegPort: 12345, eegSimulate: false, eegStream: 'raw', plotSeconds: 8, eegScale: 100, esp32Port: '', plotFilters: true };
 export function loadLocalSettings() {
   try {
     const raw = localStorage.getItem(LOCAL_KEY);

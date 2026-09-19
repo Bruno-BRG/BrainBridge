@@ -65,6 +65,12 @@ class InferenceController:
         models = self._list_available_models_use_case.execute()
         return [InferencePresenter.present_model(model) for model in models]
 
+    def preload(self) -> None:
+        """Pre-carrega o runtime de inferencia (thread principal do servidor)."""
+        gateway = self._gateway
+        if gateway is not None and hasattr(gateway, "preload"):
+            gateway.preload()
+
     def load_model(self, model_path: str) -> ModelViewModel:
         model = self._load_model_use_case.execute(model_path)
         return InferencePresenter.present_model(model)

@@ -58,7 +58,7 @@ def test_send_ping_is_silent():
 
 
 def test_firmware_inputs_cover_new_protocol():
-    src = (Path(__file__).resolve().parents[3] / "Ortese" / "ortese.cpp").read_text()
+    src = (Path(__file__).resolve().parents[3] / "Ortese" / "ortese.cpp").read_text(encoding="utf-8")
     for token in ("modoIA", "'m'", "'l'", "'e'", "'o'"):
         assert token in src
     # Outputs de motor intactos: pinos, tempos e funcoes originais.

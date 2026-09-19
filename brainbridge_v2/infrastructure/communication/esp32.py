@@ -10,6 +10,8 @@ import time
 from typing import Optional, Callable
 import logging
 
+_log = logging.getLogger(__name__)
+
 class ESP32SerialCommunicator:
     """
     Comunicacao serial com ESP32 da ortese (CIMATEC).
@@ -117,14 +119,14 @@ class ESP32SerialCommunicator:
         with self._lock:
             if self.is_connected:
                 self.logger.info("ESP32 já conectado")
-                print(f"[ESP32] ℹ Já está conectado em {self.port}", flush=True)
+                _log.info(f"[ESP32] ℹ Já está conectado em {self.port}")
                 return True
             
             # Verificar se porta existe antes de tentar conectar (com fallback).
             if not self.port_exists(self.port):
                 fallback = self.autodetect_port(self.port)
                 if fallback and fallback != self.port and self.port_exists(fallback):
-                    print(f"[ESP32] Porta {self.port} ausente; usando {fallback}", flush=True)
+                    _log.info(f"[ESP32] Porta {self.port} ausente; usando {fallback}")
                     self.port = fallback
             if not self.port_exists(self.port):
                 available_ports = self.list_available_ports()
@@ -133,11 +135,11 @@ class ESP32SerialCommunicator:
                 if available_ports:
                     msg += f"\nPortas disponíveis: {', '.join([p[0] for p in available_ports])}"
                     self.logger.error(f"Portas disponíveis: {available_ports}")
-                print(msg, flush=True)
+                _log.info(msg)
                 return False
             
             try:
-                print(f"[ESP32] Conectando em {self.port} @ {self.baudrate} baud...", flush=True)
+                _log.info(f"[ESP32] Conectando em {self.port} @ {self.baudrate} baud...")
                 self.serial_connection = serial.Serial(
                     port=self.port,
                     baudrate=self.baudrate,
@@ -153,7 +155,7 @@ class ESP32SerialCommunicator:
                     self.is_connected = True
                     msg = f"[ESP32] ✓ Conectado em {self.port} @ {self.baudrate}"
                     self.logger.info(msg)
-                    print(msg, flush=True)
+                    _log.info(msg)
 
                     # Sem PING: o firmware interpreta 'p' como pausar e 'r'
                     # (de RIGHT/PING) como reset. Conexao e silenciosa; o
@@ -167,19 +169,19 @@ class ESP32SerialCommunicator:
                     return True
                 else:
                     self.logger.error("Falha ao abrir porta serial")
-                    print("[ESP32] ✗ Falha ao abrir porta serial", flush=True)
+                    _log.info("[ESP32] ✗ Falha ao abrir porta serial")
                     return False
                     
             except serial.SerialException as e:
                 msg = f"[ESP32] ✗ Erro ao conectar: {e}"
                 self.logger.error(msg)
-                print(msg, flush=True)
+                _log.info(msg)
                 self.serial_connection = None
                 return False
             except Exception as e:
                 msg = f"[ESP32] ✗ Erro inesperado: {e}"
                 self.logger.error(msg)
-                print(msg, flush=True)
+                _log.info(msg)
                 self.serial_connection = None
                 return False
     
@@ -214,7 +216,7 @@ class ESP32SerialCommunicator:
         """
         if not self.is_connected or not self.serial_connection:
             self.logger.warning(f"[ESP32] Não conectado - comando '{command}' ignorado")
-            print(f"[ESP32] ✗ Não conectado para enviar: {command}", flush=True)
+            _log.info(f"[ESP32] ✗ Não conectado para enviar: {command}")
             return False
         
         try:
@@ -227,17 +229,17 @@ class ESP32SerialCommunicator:
             self.serial_connection.flush()
             
             self.logger.info(f"[ESP32] Enviado: {command.strip()} ({bytes_written} bytes)")
-            print(f"[ESP32] ✓ Comando enviado: {command.strip()}", flush=True)
+            _log.info(f"[ESP32] ✓ Comando enviado: {command.strip()}")
             return True
             
         except serial.SerialException as e:
             self.logger.error(f"[ESP32] Erro serial: {e}")
             self.is_connected = False
-            print(f"[ESP32] ✗ Erro serial: {e}", flush=True)
+            _log.info(f"[ESP32] ✗ Erro serial: {e}")
             return False
         except Exception as e:
             self.logger.error(f"[ESP32] Erro inesperado: {e}")
-            print(f"[ESP32] ✗ Erro: {e}", flush=True)
+            _log.info(f"[ESP32] ✗ Erro: {e}")
             return False
     
     def _send_raw_command(self, command: str) -> bool:
@@ -272,7 +274,7 @@ class ESP32SerialCommunicator:
                 if tempo_restante > 0:
                     msg = f"[ESP32] ⏳ Trigger bloqueado por {tempo_restante:.1f}s"
                     self.logger.warning(msg)
-                    print(msg, flush=True)
+                    _log.info(msg)
                     return False
                 else:
                     # Tempo expirou, liberar novo trigger
@@ -296,7 +298,7 @@ class ESP32SerialCommunicator:
             self.trigger_active = True
             msg = f"[ESP32] ▶️  Trigger iniciado - bloqueado por {self.trigger_duration}s"
             self.logger.info(msg)
-            print(msg, flush=True)
+            _log.info(msg)
         
         return success
     
@@ -450,25 +452,25 @@ if __name__ == "__main__":
     # Teste de comunicação
     esp32 = ESP32SerialCommunicator()
     
-    print("Testando comunicação com ESP32...")
+    _log.info("Testando comunicação com ESP32...")
     
     if esp32.connect():
-        print("✓ Conectado ao ESP32")
+        _log.info("✓ Conectado ao ESP32")
         
         # Testar comandos
-        print("Testando PING...")
+        _log.info("Testando PING...")
         esp32.send_ping()
         time.sleep(1)
         
-        print("Testando TRIGGER_LEFT...")
+        _log.info("Testando TRIGGER_LEFT...")
         esp32.send_trigger_left()
         time.sleep(1)
         
-        print("Testando TRIGGER_RIGHT...")
+        _log.info("Testando TRIGGER_RIGHT...")
         esp32.send_trigger_right()
         time.sleep(1)
         
         esp32.disconnect()
-        print("✓ Desconectado do ESP32")
+        _log.info("✓ Desconectado do ESP32")
     else:
-        print("✗ Falha ao conectar ESP32")
+        _log.info("✗ Falha ao conectar ESP32")

@@ -1,7 +1,7 @@
 """
 Game inference window coordination.
 
-This module keeps the timing/buffering rule independent from the PyQt UI:
+This module keeps the timing/buffering rule independent from the UI:
 after a task marker is sent to Unity, collect exactly a fresh EEG window before
 allowing one inference response.
 """

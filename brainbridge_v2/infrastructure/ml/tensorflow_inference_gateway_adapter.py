@@ -42,6 +42,8 @@ class TensorFlowInferenceGatewayAdapter:
         self._adapter_factory = adapter_factory or (
             lambda: TensorFlowMLAdapter(config={})
         )
+        # Com factory customizada (testes com fakes) nunca tocamos no TF real.
+        self._uses_real_tensorflow = adapter_factory is None
         self._warmup_enabled = bool(warmup_enabled)
         self._input_sample_rate = float(input_sample_rate)
         self._ea_calibration_samples = max(
@@ -53,12 +55,47 @@ class TensorFlowInferenceGatewayAdapter:
         self._adapter: Optional[TensorFlowMLAdapter] = None
         self._loaded_model: Optional[ModelMetadata] = None
         self._lock = RLock()
+        self._tf_preloaded = False
+        self._tf_error: Optional[str] = None
+
+    def preload(self) -> None:
+        """Importa o runtime TensorFlow de forma antecipada (warm-up).
+
+        Chamado no startup do servidor para que o primeiro `/api/models/load`
+        nao pague o custo do import. Com factory customizada (testes) e um
+        no-op: os fakes nunca precisam do TF real.
+        """
+        if not self._uses_real_tensorflow:
+            return
+        with self._lock:
+            if self._tf_preloaded:
+                return
+            try:
+                import tensorflow.keras.models  # noqa: F401
+            except ImportError as exc:
+                self._tf_error = str(exc) or "TensorFlow indisponivel."
+                raise
+            self._tf_preloaded = True
+            self._tf_error = None
+
+    def is_tf_available(self) -> bool:
+        with self._lock:
+            return self._tf_error is None
 
     def load_model(self, model_path: str) -> ModelMetadata:
         with self._lock:
             return self._load_model(model_path)
 
     def _load_model(self, model_path: str) -> ModelMetadata:
+        # Garante o runtime carregado (no-op apos o preload do startup).
+        if not self._tf_preloaded:
+            try:
+                self.preload()
+            except ImportError as exc:
+                raise ImportError(
+                    "TensorFlow nao esta disponivel. Instale com: "
+                    f"pip install tensorflow ({exc})"
+                ) from exc
         # Runtime supplies RAW. The old IQR/crop/pad path is not safe for it.
         self._adapter = None
         self._loaded_model = None
